@@ -1,0 +1,311 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bgDarker text-gray-100 font-sans;
+    font-family: 'Plus Jakarta Sans', 'Outfit', sans-serif;
+  }
+  canvas {
+    outline: none !important;
+  }
+}
+
+/* スクロールバーのカスタマイズ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(7, 10, 19, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+/* グラスモルフィズム風カード効果 */
+.glass-panel {
+  background: rgba(19, 26, 44, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Markdownプレビューのスタイル調整 */
+.markdown-preview h1 {
+  @apply text-2xl font-bold mt-6 mb-4 text-white border-b border-gray-800 pb-2;
+}
+
+.markdown-preview h2 {
+  @apply text-xl font-semibold mt-5 mb-3 text-indigo-300;
+}
+
+.markdown-preview h3 {
+  @apply text-lg font-medium mt-4 mb-2 text-indigo-400;
+}
+
+.markdown-preview p {
+  @apply mb-4 text-gray-300 leading-relaxed;
+}
+
+.markdown-preview ul, .markdown-preview ol {
+  @apply mb-4 pl-6 list-disc text-gray-300;
+}
+
+.markdown-
+.markdown-
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.1s ease;
+}
+
+.property-tag-remove:hover {
+  color: #f87171;
+}
+
+.property-text-val {
+  color: #d1d5db;
+}
+
+.add-property-row {
+  margin-top: 0.25rem;
+}
+
+/* Obsidian コールアウトのスタイル */
+.obsidian-callout {
+  border-left: 4px solid #6b7280;
+  border-radius: 4px;
+  padding: 0.75rem 1rem;
+  margin: 1.25rem 0;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.callout-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 0.35rem;
+}
+
+.callout-content {
+  font-size: 0.88rem;
+  color: #d1d5db;
+  line-height: 1.6;
+}
+
+.callout-content > p:last-child {
+  margin-bottom: 0;
+}
+
+/* 各コールアウトタイプのカラーバリエーション */
+.callout-question, .callout-help {
+  border-left-color: #e38c27;
+  background: rgba(227, 140, 39, 0.05);
+}
+.callout-question .callout-title, .callout-help .callout-title {
+  color: #e38c27;
+}
+
+.callout-info, .callout-note {
+  border-left-color: #0084ff;
+  background: rgba(0, 132, 255, 0.05);
+}
+.callout-info .callout-title, .callout-note .callout-title {
+  color: #0084ff;
+}
+
+.callout-gemini {
+  border-left-color: #10b981;
+  background: rgba(16, 185, 129, 0.05);
+}
+.callout-gemini .callout-title {
+  color: #10b981;
+}
+
+.callout-warning, .callout-caution {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+.callout-warning .callout-title, .callout-caution .callout-title {
+  color: #ef4444;
+}

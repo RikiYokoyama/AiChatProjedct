@@ -1,0 +1,6 @@
+node_modules
+dist
+release
+unpacked_app
+*.log
+.DS_Store

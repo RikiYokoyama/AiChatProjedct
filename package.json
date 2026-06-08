@@ -1,0 +1,54 @@
+{
+  "name": "ai-markdown-chat-note",
+  "version": "1.0.0",
+  "description": "Local-first Markdown Note App with AI Chat and GitHub Sync",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "vite",
+    "electron:dev": "electron .",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "dist": "npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& electron-builder --win dir"
+  },
+  "keywords": [],
+  "author": "Ry",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "latest",
+    "lucide-react": "^0.435.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0",
+    "simple-git": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "electron": "^31.0.1",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.1"
+  },
+  "build": {
+    "appId": "com.local.ai-markdown-chat-note",
+    "productName": "AI Markdown Chat Note",
+    "files": [
+      "dist/**/*",
+      "src/main/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "dir",
+      "signAndEditExecutable": false
+    }
+  }
+}

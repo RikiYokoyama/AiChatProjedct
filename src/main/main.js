@@ -1,0 +1,525 @@
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const simpleGit = require('simple-git');
+
+let mainWindow;
+const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+
+const appUserDataPath = app.getPath('userData');
+const configFilePath = path.join(appUserDataPath, 'config.json');
+const defaultNotesPath = path.join(app.getPath('documents'), 'AiChatNotes');
+
+if (!fs.existsSync(defaultNotesPath)) {
+  fs.mkdirSync(defaultNotesPath, { recursive: true });
+}
+
+let appConfig = {
+  geminiApiKey: '',
+  notesPath: defaultNotesPath,
+  gitRemoteUrl: '',
+  autoSync: false,
+};
+
+function loadConfig() {
+  try {
+    if (fs.existsSync(configFilePath)) {
+      const data = fs.readFileSync(configFilePath, 'utf8');
+      appConfig = { ...appConfig, ...JSON.parse(data) };
+    }
+  } catch (err) {
+    console.error('Failed to load config:', err);
+  }
+
+  return appConfig;
+}
+
+function saveConfig(newConfig) {
+  try {
+    appConfig = { ...appConfig, ...newConfig };
+
+    if (appConfig.notesPath && !fs.existsSync(appConfig.notesPath)) {
+      fs.mkdirSync(appConfig.notesPath, { recursive: true });
+    }
+
+    fs.writeFileSync(configFilePath, JSON.stringify(appConfig, null, 2), 'utf8');
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to save config:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+async function runGitSync() {
+  const notesPath = appConfig.notesPath;
+
+  if (!notesPath || !fs.existsSync(notesPath)) {
+    return { success: false, error: 'Notes folder was not found.' };
+  }
+
+  try {
+    const git = simpleGit(notesPath);
+    const isRepo = await git.checkIsRepo();
+
+    if (!isRepo) {
+      await git.init();
+    }
+
+    if (appConfig.gitRemoteUrl) {
+      const remotes = await git.getRemotes();
+      const hasOrigin = remotes.some((remote) => remote.name === 'origin');
+
+      if (hasOrigin) {
+        await git.remote(['set-url', 'origin', appConfig.gitRemoteUrl]);
+      } else {
+        await git.addRemote('origin', appConfig.gitRemoteUrl);
+      }
+    }
+
+    mainWindow?.webContents.send('git-status-changed', 'syncing');
+
+    await git.add('.');
+    const status = await git.status();
+
+    if (status.files.length > 0) {
+      await git.commit('Auto-commit: AI chat log');
+    }
+
+    if (appConfig.gitRemoteUrl) {
+      let branchName = 'main';
+
+      try {
+        const branches = await git.branch();
+        branchName = branches.current || 'main';
+      } catch (err) {
+        await git.checkoutLocalBranch('main');
+        branchName = 'main';
+      }
+
+      await git.push('origin', branchName, { '--set-upstream': null });
+    }
+
+    mainWindow?.webContents.send('git-status-changed', 'success');
+    return { success: true };
+  } catch (err) {
+    console.error('Git sync failed:', err);
+    mainWindow?.webContents.send('git-status-changed', 'error', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    minWidth: 1000,
+    minHeight: 600,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#070a13',
+      symbolColor: '#f3f4f6',
+      height: 35,
+    },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  loadConfig();
+
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+  }
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+}
+
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+ipcMain.handle('load-config', () => loadConfig());
+ipcMain.handle('save-config', (event, config) => saveConfig(config));
+
+// ウィンドウドラッグ移動用
+ipcMain.on('window-moving', (event, { deltaX, deltaY }) => {
+  if (mainWindow) {
+    const [x, y] = mainWindow.getPosition();
+    mainWindow.setPosition(x + deltaX, y + deltaY);
+  }
+});
+
+const cacheFilePath = path.join(appUserDataPath, 'metadata_cache.json');
+
+function loadMetadataCache() {
+  try {
+    if (fs.existsSync(cacheFilePath)) {
+      const data = fs.readFileSync(cacheFilePath, 'utf8');
+      const cacheObj = JSON.parse(data);
+      // バージョンが違う（ハッシュタグ廃止前の古いキャッシュ）場合は再構築のためクリアする
+      if (cacheObj._version !== 2) {
+        return { _version: 2 };
+      }
+      return cacheObj;
+    }
+  } catch (err) {
+    console.error('Failed to load metadata cache:', err);
+  }
+  return { _version: 2 };
+}
+
+function saveMetadataCache(cache) {
+  try {
+    fs.writeFileSync(cacheFilePath, JSON.stringify(cache, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to save metadata cache:', err);
+  }
+}
+
+// タグ抽出（先頭20,000文字制限でReDoS/フリーズ防止）
+function extractTags(content) {
+  const tags = [];
+  if (!content) return tags;
+  const safeContent = content.slice(0, 20000);
+  
+  const fmMatch = safeContent.match(/^---([\s\S]*?)---/);
+  if (fmMatch) {
+    const fm = fmMatch[1];
+    
+    // tags: [A, B] 形式の抽出
+    const inlineTagsMatch = fm.match(/(?:tags|tag):\s*\[(.*?)\]/i);
+    if (inlineTagsMatch) {
+      inlineTagsMatch[1].split(',').forEach(t => {
+        const cleaned = t.trim().replace(/['"]/g, '');
+        if (cleaned && !tags.includes(cleaned)) tags.push(cleaned);
+      });
+    } else {
+      // tags: \n - A \n - B 形式の抽出
+      const blockTagsMatch = fm.match(/(?:tags|tag):\s*\n((?:\s*-\s*\S+\s*\n?)+)/i);
+      if (blockTagsMatch) {
+        const lines = blockTagsMatch[1].split('\n');
+        lines.forEach(line => {
+          const match = line.match(/\s*-\s*(\S+)/);
+          if (match) {
+            const cleaned = match[1].trim().replace(/['"]/g, '');
+            if (cleaned && !tags.includes(cleaned)) {
+              tags.push(cleaned);
+            }
+          }
+        });
+      } else {
+        // tags: A, B または tags: A (単一行カンマ区切りまたは単一) 形式の抽出
+        const singleLineMatch = fm.match(/(?:tags|tag):\s*([^\n\r]+)/i);
+        if (singleLineMatch) {
+          singleLineMatch[1].split(',').forEach(t => {
+            const cleaned = t.trim().replace(/['"]/g, '');
+            if (cleaned.includes(' ')) {
+              cleaned.split(/\s+/).forEach(subT => {
+                const subCleaned = subT.trim().replace(/['"]/g, '');
+                if (subCleaned && !tags.includes(subCleaned)) tags.push(subCleaned);
+              });
+            } else {
+              if (cleaned && !tags.includes(cleaned)) tags.push(cleaned);
+            }
+          });
+        }
+      }
+    }
+  }
+
+  return tags;
+}
+
+// Wikiリンク抽出（先頭20,000文字制限でReDoS/フリーズ防止）
+function extractWikiLinks(content) {
+  const links = [];
+  if (!content) return links;
+  const safeContent = content.slice(0, 20000);
+  const textWithoutCode = safeContent.replace(/```[\s\S]*?```/g, '');
+  
+  const wikiLinkRegex = /\[\[(.*?)\]\]/g;
+  let match;
+  while ((match = wikiLinkRegex.exec(textWithoutCode)) !== null) {
+    const rawLink = match[1];
+    if (rawLink) {
+      // パイプ | でのエイリアス分離
+      const target = rawLink.split('|')[0].trim();
+      // シャープ # でのヘッダー・ブロックアンカー分離
+      const cleanTarget = target.split('#')[0].split('^')[0].trim().replace(/\.md$/, '');
+      if (cleanTarget && !links.includes(cleanTarget)) {
+        links.push(cleanTarget);
+      }
+    }
+  }
+  return links;
+}
+
+// 並行処理を制御する非同期プール
+async function limitConcurrent(tasks, limit = 50) {
+  const results = [];
+  const executing = new Set();
+  
+  for (const task of tasks) {
+    const p = Promise.resolve().then(() => task());
+    results.push(p);
+    executing.add(p);
+    const clean = () => executing.delete(p);
+    p.then(clean, clean);
+    if (executing.size >= limit) {
+      await Promise.race(executing);
+    }
+  }
+  return Promise.all(results);
+}
+
+async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
+  let results = [];
+  try {
+    const exists = await fs.promises.stat(dirPath).then(() => true).catch(() => false);
+    if (!exists) return results;
+    
+    const list = await fs.promises.readdir(dirPath);
+    const tasks = [];
+    
+    for (const file of list) {
+      if (file.startsWith('.')) continue; // 隠しフォルダや.obsidian、.gitは無視
+      const filePath = path.join(dirPath, file);
+      
+      tasks.push(async () => {
+        try {
+          const stat = await fs.promises.stat(filePath);
+          if (stat.isDirectory()) {
+            const subResults = await getAllMarkdownFiles(filePath, basePath, cache, cacheUpdated);
+            results = results.concat(subResults);
+          } else if (file.endsWith('.md')) {
+            const relativePath = path.relative(basePath, filePath).replace(/\\/g, '/');
+            const mtimeStr = stat.mtime.toISOString();
+            
+            let cached = cache[relativePath];
+            if (!cached || cached.updatedAt !== mtimeStr) {
+              let content = '';
+              try {
+                content = await fs.promises.readFile(filePath, 'utf8');
+              } catch (err) {
+                console.error(err);
+              }
+              const tags = extractTags(content);
+              const wikiLinks = extractWikiLinks(content);
+              cached = {
+                updatedAt: mtimeStr,
+                tags,
+                wikiLinks
+              };
+              cache[relativePath] = cached;
+              cacheUpdated.value = true;
+            }
+            
+            results.push({
+              name: relativePath,
+              path: filePath,
+              updatedAt: mtimeStr,
+              content: '', // 本文ロードをスキップ
+              tags: cached.tags,
+              wikiLinks: cached.wikiLinks
+            });
+          }
+        } catch (err) {
+          console.error(`Error scanning path: ${filePath}`, err);
+        }
+      });
+    }
+    
+    await limitConcurrent(tasks, 50);
+  } catch (err) {
+    console.error('Error directory traversal:', err);
+  }
+  return results;
+}
+
+ipcMain.handle('list-notes', async () => {
+  try {
+    const notesPath = appConfig.notesPath;
+    const exists = await fs.promises.stat(notesPath).then(() => true).catch(() => false);
+    if (!exists) {
+      return [];
+    }
+    const cache = loadMetadataCache();
+    const cacheUpdated = { value: false };
+    const files = await getAllMarkdownFiles(notesPath, notesPath, cache, cacheUpdated);
+    
+    if (cacheUpdated.value) {
+      saveMetadataCache(cache);
+    }
+    return files;
+  } catch (err) {
+    console.error('Failed to list notes:', err);
+    return [];
+  }
+});
+
+ipcMain.handle('read-note', async (event, filename) => {
+  try {
+    const notesPath = appConfig.notesPath;
+    const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
+    const filePath = path.join(notesPath, safeFilename);
+    const exists = await fs.promises.stat(filePath).then(() => true).catch(() => false);
+    if (!exists) {
+      throw new Error('File not found');
+    }
+    return await fs.promises.readFile(filePath, 'utf8');
+  } catch (err) {
+    console.error('Failed to read note:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('save-note', async (event, { filename, content }) => {
+  try {
+    const notesPath = appConfig.notesPath;
+
+    if (!fs.existsSync(notesPath)) {
+      fs.mkdirSync(notesPath, { recursive: true });
+    }
+
+    const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
+    const filePath = path.join(notesPath, safeFilename);
+
+    // 常に上書き保存（writeFileSync）
+    fs.writeFileSync(filePath, content, 'utf8');
+
+    return { success: true, path: filePath };
+  } catch (err) {
+    console.error('Failed to save note:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('rename-note', async (event, { oldFilename, newFilename }) => {
+  try {
+    const notesPath = appConfig.notesPath;
+    const oldSafe = oldFilename.endsWith('.md') ? oldFilename : `${oldFilename}.md`;
+    const newSafe = newFilename.endsWith('.md') ? newFilename : `${newFilename}.md`;
+    const oldPath = path.join(notesPath, oldSafe);
+    const newPath = path.join(notesPath, newSafe);
+
+    if (!fs.existsSync(oldPath)) {
+      return { success: false, error: '元のファイルが見つかりません。' };
+    }
+    if (fs.existsSync(newPath)) {
+      return { success: false, error: '同名のファイルが既に存在します。' };
+    }
+
+    fs.renameSync(oldPath, newPath);
+
+
+
+    return { success: true, path: newPath };
+  } catch (err) {
+    console.error('Failed to rename note:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('delete-note', async (event, filename) => {
+  try {
+    const notesPath = appConfig.notesPath;
+    const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
+    const filePath = path.join(notesPath, safeFilename);
+
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: 'ファイルが見つかりません。' };
+    }
+
+    fs.unlinkSync(filePath);
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to delete note:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('sync-git', async () => runGitSync());
+
+ipcMain.handle('open-directory-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+  });
+
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// HTMLからタグを除去してプレーンテキストを抽出する簡易クリーニング関数
+function cleanHtmlToText(html) {
+  if (!html) return '';
+  
+  // 1. script, style, head, noscript, iframe, svg などの不要なセクションを丸ごと削除
+  let clean = html.replace(/<(script|style|head|noscript|iframe|svg|canvas)\b[^>]*>([\s\S]*?)<\/\1>/gi, '');
+  
+  // 2. HTMLコメントを削除
+  clean = clean.replace(/<!--[\s\S]*?-->/g, '');
+  
+  // 3. HTMLタグを削除して空白に置き換え
+  clean = clean.replace(/<[^>]+>/g, ' ');
+  
+  // 4. 特殊文字（実体参照）の簡易変換
+  const entities = {
+    '&nbsp;': ' ', '&lt;': '<', '&gt;': '>', '&amp;': '&',
+    '&quot;': '"', '&apos;': "'", '&#39;': "'", '&copy;': '©',
+    '&reg;': '®'
+  };
+  for (const [entity, replacement] of Object.entries(entities)) {
+    clean = clean.replaceAll(entity, replacement);
+  }
+  
+  // 5. 余計なスペースや連続改行を整理
+  clean = clean.replace(/[ \t]+/g, ' ');
+  clean = clean.replace(/\n\s*\n+/g, '\n\n');
+  
+  return clean.trim();
+}
+
+// URLのWebページをフェッチしてクリーンなテキストを返すハンドラー
+ipcMain.handle('fetch-url-text', async (event, url) => {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+      },
+      signal: AbortSignal.timeout(10000) // 10秒タイムアウト
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP status ${response.status}`);
+    }
+
+    const html = await response.text();
+    const cleanText = cleanHtmlToText(html);
+    
+    // トークン節約のため最大8000文字程度に制限して返す
+    return cleanText.slice(0, 8000);
+  } catch (err) {
+    console.error('Failed to fetch URL:', err);
+    throw new Error(`URLの中身の取得に失敗しました: ${err.message}`);
+  }
+});
+
