@@ -163,6 +163,7 @@ export default function App() {
   const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -372,6 +373,7 @@ export default function App() {
     const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
     setChatHistory(nextHistory);
     setChatInput('');
+    if (chatInputRef.current) chatInputRef.current.style.height = 'auto';
     setStreamedText('');
     setIsGenerating(true);
 
@@ -575,9 +577,9 @@ export default function App() {
               value={chatMode}
               onChange={(e) => setChatMode(e.target.value as ChatMode)}
             >
-              <option value="deep-think">深く考える</option>
-              <option value="markdown-struct">MD整理</option>
-              <option value="long-explain">詳しく説明</option>
+              <option value="deep-think">思考整理</option>
+              <option value="markdown-struct">ノート作成</option>
+              <option value="long-explain">長文詳細説明</option>
             </select>
             <select
               className="rounded bg-black/30 px-2 py-1.5 text-xs text-gray-300"
@@ -628,14 +630,29 @@ export default function App() {
         )}
 
         <form
-          className="flex gap-2 border-t border-white/10 p-3"
+          className="flex items-end gap-2 border-t border-white/10 p-3"
           onSubmit={(e) => { e.preventDefault(); sendChat(); }}
         >
-          <input
-            className="min-w-0 flex-1 rounded bg-black/30 px-3 py-2 text-sm outline-none"
+          <textarea
+            ref={chatInputRef}
+            className="min-w-0 flex-1 resize-none rounded bg-black/30 px-3 py-2 text-sm outline-none"
+            rows={1}
+            style={{ maxHeight: '160px', overflowY: 'auto', lineHeight: '1.5' }}
             value={chatInput}
-            onChange={(e) => setChatInput(e.target.value)}
-            placeholder="AIに質問"
+            onChange={(e) => {
+              setChatInput(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChat();
+                // 送信後に高さをリセット
+                e.currentTarget.style.height = 'auto';
+              }
+            }}
+            placeholder="AIに質問（Shift+Enterで改行）"
           />
           <button
             className="rounded bg-indigo-500 p-2 hover:bg-indigo-400 disabled:opacity-40"
