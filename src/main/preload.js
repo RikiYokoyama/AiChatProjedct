@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteNote: (filename) => ipcRenderer.invoke('delete-note', filename),
   windowMoving: (delta) => ipcRenderer.send('window-moving', delta),
   fetchUrlText: (url) => ipcRenderer.invoke('fetch-url-text', url),
+  appendToNote: (data) => ipcRenderer.invoke('append-to-note', data),
   
   // Gitステータス変更の通知リスナー
   onGitStatusChanged: (callback) => {

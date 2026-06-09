@@ -19,7 +19,10 @@ interface Window {
       path: string;
       updatedAt: string;
       content: string;
+      tags?: string[];
+      wikiLinks?: string[];
     }>>;
+    readNote: (filename: string) => Promise<string>;
     saveNote: (data: { filename: string; content: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
     renameNote: (data: { oldFilename: string; newFilename: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
     syncGit: () => Promise<{ success: boolean; error?: string }>;
@@ -28,5 +31,6 @@ interface Window {
     onGitStatusChanged: (callback: (status: 'idle' | 'syncing' | 'success' | 'error', error?: string) => void) => () => void;
     windowMoving: (delta: { deltaX: number; deltaY: number }) => void;
     fetchUrlText: (url: string) => Promise<string>;
+    appendToNote: (data: { filename: string; appendContent: string }) => Promise<{ success: boolean; error?: string }>;
   };
 }

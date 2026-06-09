@@ -168,6 +168,19 @@ ipcMain.on('window-moving', (event, { deltaX, deltaY }) => {
   }
 });
 
+function resolveNotePath(notesPath, filename) {
+  const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
+  const normalized = path.normalize(safeFilename).replace(/^(\.\.(\/|\\|$))+/, '');
+  const filePath = path.resolve(notesPath, normalized);
+  const root = path.resolve(notesPath);
+
+  if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
+    throw new Error('Invalid note path');
+  }
+
+  return filePath;
+}
+
 const cacheFilePath = path.join(appUserDataPath, 'metadata_cache.json');
 
 function loadMetadataCache() {
@@ -379,8 +392,7 @@ ipcMain.handle('list-notes', async () => {
 ipcMain.handle('read-note', async (event, filename) => {
   try {
     const notesPath = appConfig.notesPath;
-    const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
-    const filePath = path.join(notesPath, safeFilename);
+    const filePath = resolveNotePath(notesPath, filename);
     const exists = await fs.promises.stat(filePath).then(() => true).catch(() => false);
     if (!exists) {
       throw new Error('File not found');
@@ -400,10 +412,8 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
       fs.mkdirSync(notesPath, { recursive: true });
     }
 
-    const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
-    const filePath = path.join(notesPath, safeFilename);
+    const filePath = resolveNotePath(notesPath, filename);
 
-    // 常に上書き保存（writeFileSync）
     fs.writeFileSync(filePath, content, 'utf8');
 
     return { success: true, path: filePath };
@@ -416,10 +426,8 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
 ipcMain.handle('rename-note', async (event, { oldFilename, newFilename }) => {
   try {
     const notesPath = appConfig.notesPath;
-    const oldSafe = oldFilename.endsWith('.md') ? oldFilename : `${oldFilename}.md`;
-    const newSafe = newFilename.endsWith('.md') ? newFilename : `${newFilename}.md`;
-    const oldPath = path.join(notesPath, oldSafe);
-    const newPath = path.join(notesPath, newSafe);
+    const oldPath = resolveNotePath(notesPath, oldFilename);
+    const newPath = resolveNotePath(notesPath, newFilename);
 
     if (!fs.existsSync(oldPath)) {
       return { success: false, error: '元のファイルが見つかりません。' };
@@ -442,8 +450,7 @@ ipcMain.handle('rename-note', async (event, { oldFilename, newFilename }) => {
 ipcMain.handle('delete-note', async (event, filename) => {
   try {
     const notesPath = appConfig.notesPath;
-    const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
-    const filePath = path.join(notesPath, safeFilename);
+    const filePath = resolveNotePath(notesPath, filename);
 
     if (!fs.existsSync(filePath)) {
       return { success: false, error: 'ファイルが見つかりません。' };
@@ -453,6 +460,21 @@ ipcMain.handle('delete-note', async (event, filename) => {
     return { success: true };
   } catch (err) {
     console.error('Failed to delete note:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('append-to-note', async (event, { filename, appendContent }) => {
+  try {
+    const notesPath = appConfig.notesPath;
+    if (!fs.existsSync(notesPath)) fs.mkdirSync(notesPath, { recursive: true });
+
+    const filePath = resolveNotePath(notesPath, filename);
+    const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+    fs.writeFileSync(filePath, existing.trimEnd() + '\n\n' + appendContent.trimStart(), 'utf8');
+    return { success: true, path: filePath };
+  } catch (err) {
+    console.error('Failed to append to note:', err);
     return { success: false, error: err.message };
   }
 });
@@ -522,4 +544,3 @@ ipcMain.handle('fetch-url-text', async (event, url) => {
     throw new Error(`URLの中身の取得に失敗しました: ${err.message}`);
   }
 });
-
