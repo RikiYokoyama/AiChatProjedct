@@ -18,6 +18,20 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import {
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import GraphView from './GraphView';
 import { AiModelMode, AiSpeedMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle } from './lib/gemini';
 
@@ -75,8 +89,56 @@ function RibbonButton({
   );
 }
 
+// ドラッグ可能なタブコンポーネント
+function SortableTab({
+  note,
+  isActive,
+  onClick,
+  onClose,
+}: {
+  note: Note;
+  isActive: boolean;
+  onClick: () => void;
+  onClose: (e: React.MouseEvent) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: note.name });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={onClick}
+      className={`group flex h-9 max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/10 px-3 text-xs transition-colors ${
+        isActive
+          ? 'bg-[#090d19] text-gray-100'
+          : 'bg-[#0b1020] text-gray-400 hover:bg-[#0d1525] hover:text-gray-200'
+      }`}
+    >
+      <FileText className="h-3 w-3 shrink-0" />
+      <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+      <button
+        onClick={onClose}
+        className="ml-0.5 hidden shrink-0 rounded p-0.5 hover:bg-white/20 group-hover:flex"
+        title="閉じる"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
+  // 開いているタブの順序付きリスト
+  const [openTabs, setOpenTabs] = useState<Note[]>([]);
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
   const [content, setContent] = useState('');
   const [noteContext, setNoteContext] = useState<string | null>(null);
@@ -102,6 +164,8 @@ export default function App() {
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
   const filteredNotes = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return notes;
@@ -113,8 +177,14 @@ export default function App() {
     try {
       const list = await window.electronAPI.listNotes();
       setNotes(list);
+      // タブ内のノートをリストの最新情報で更新
+      setOpenTabs((prev) =>
+        prev
+          .map((tab) => list.find((n) => n.name === tab.name) ?? tab)
+          .filter((tab) => list.some((n) => n.name === tab.name)),
+      );
       if (selectedNote) {
-        const updated = list.find((note) => note.name === selectedNote.name);
+        const updated = list.find((n) => n.name === selectedNote.name);
         setSelectedNote(updated ?? null);
       }
     } finally {
@@ -122,12 +192,62 @@ export default function App() {
     }
   }
 
+  // ノートを開く：タブ追加 + チャット履歴クリア
   async function openNote(note: Note) {
     const noteContent = await window.electronAPI.readNote(note.name);
+
+    // 別ノートへの切り替えならチャット履歴をクリア
+    if (selectedNote && selectedNote.name !== note.name) {
+      setChatHistory([]);
+      setStreamedText('');
+    }
+
     setSelectedNote(note);
     setContent(noteContent);
     setNoteContext(noteContent);
     setEditMode('preview');
+
+    // タブに未登録なら追加
+    setOpenTabs((prev) => {
+      if (prev.some((t) => t.name === note.name)) return prev;
+      return [...prev, note];
+    });
+  }
+
+  // タブを閉じる
+  function closeTab(e: React.MouseEvent, tabName: string) {
+    e.stopPropagation();
+    setOpenTabs((prev) => {
+      const idx = prev.findIndex((t) => t.name === tabName);
+      const next = prev.filter((t) => t.name !== tabName);
+
+      if (selectedNote?.name === tabName) {
+        // 閉じたタブが選択中 → 直前のタブへ移動
+        const fallback = next[Math.max(0, idx - 1)] ?? next[0] ?? null;
+        if (fallback) {
+          openNote(fallback);
+        } else {
+          setSelectedNote(null);
+          setContent('');
+          setNoteContext(null);
+          setChatHistory([]);
+          setStreamedText('');
+        }
+      }
+      return next;
+    });
+  }
+
+  // タブのドラッグ並び替え
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      setOpenTabs((prev) => {
+        const oldIndex = prev.findIndex((t) => t.name === active.id);
+        const newIndex = prev.findIndex((t) => t.name === over.id);
+        return arrayMove(prev, oldIndex, newIndex);
+      });
+    }
   }
 
   async function createNoteFromModal(event: React.FormEvent<HTMLFormElement>) {
@@ -142,7 +262,7 @@ export default function App() {
     setShowNewNoteModal(false);
     setNewNoteName('Untitled');
     await loadNotesList();
-    const note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
+    const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
     setEditMode('edit');
   }
@@ -171,9 +291,23 @@ export default function App() {
       alert(result.error ?? '削除に失敗しました');
       return;
     }
-    setSelectedNote(null);
-    setContent('');
-    setNoteContext(null);
+    // 削除したノートのタブを閉じる処理をシミュレート
+    const tabName = selectedNote.name;
+    setOpenTabs((prev) => {
+      const idx = prev.findIndex((t) => t.name === tabName);
+      const next = prev.filter((t) => t.name !== tabName);
+      const fallback = next[Math.max(0, idx - 1)] ?? next[0] ?? null;
+      if (fallback) {
+        openNote(fallback);
+      } else {
+        setSelectedNote(null);
+        setContent('');
+        setNoteContext(null);
+        setChatHistory([]);
+        setStreamedText('');
+      }
+      return next;
+    });
     await loadNotesList();
   }
 
@@ -220,6 +354,7 @@ export default function App() {
           setSelectedNote(note);
           setContent(fullContent);
           setNoteContext(fullContent);
+          setOpenTabs((prev) => (prev.some((t) => t.name === filename) ? prev : [...prev, note]));
         }
       }
       await loadNotesList();
@@ -248,8 +383,7 @@ export default function App() {
       noteContext,
       (chunk) => setStreamedText((prev) => prev + chunk),
       (fullText) => {
-        const finalHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
-        setChatHistory(finalHistory);
+        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
         setStreamedText('');
         setIsGenerating(false);
         handleAutoSave(prompt, fullText);
@@ -349,17 +483,38 @@ export default function App() {
         </div>
       </aside>
 
-      {/* エディタ */}
+      {/* エディタ領域 */}
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-11 items-center justify-between border-b border-white/10 bg-[#0b1020] px-4">
+        {/* タブバー */}
+        <div className="flex h-9 items-stretch overflow-x-auto border-b border-white/10 bg-[#0b1020]" style={{ scrollbarWidth: 'none' }}>
+          <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+            <SortableContext items={openTabs.map((t) => t.name)} strategy={horizontalListSortingStrategy}>
+              {openTabs.map((tab) => (
+                <SortableTab
+                  key={tab.name}
+                  note={tab}
+                  isActive={selectedNote?.name === tab.name}
+                  onClick={() => openNote(tab)}
+                  onClose={(e) => closeTab(e, tab.name)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+          {openTabs.length === 0 && (
+            <span className="flex items-center px-4 text-xs text-gray-600">ノートを選択して開いてください</span>
+          )}
+        </div>
+
+        {/* エディタツールバー */}
+        <div className="flex h-10 items-center justify-between border-b border-white/10 bg-[#0b1020]/80 px-4">
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold">{selectedNote?.name ?? 'ノートを選択してください'}</h1>
             {gitError && <p className="truncate text-xs text-red-300">{gitError}</p>}
           </div>
           <div className="flex items-center gap-1">
             <button
-              className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100"
+              className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
               onClick={() => setEditMode(editMode === 'edit' ? 'preview' : 'edit')}
+              disabled={!selectedNote}
               title="編集/プレビュー"
             >
               {editMode === 'edit' ? <Eye className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
@@ -382,6 +537,8 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* エディタ本体 */}
         <div className="min-h-0 flex-1 overflow-hidden">
           {selectedNote ? (
             editMode === 'edit' ? (
@@ -445,7 +602,7 @@ export default function App() {
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 text-sm">
           {chatHistory.length === 0 && !streamedText && (
-            <p className="text-center text-xs text-gray-600 pt-4">
+            <p className="pt-4 text-center text-xs text-gray-600">
               {noteContext ? '開いているノートの内容を前提に回答します' : 'ノートを開くと内容を前提に回答します'}
             </p>
           )}
