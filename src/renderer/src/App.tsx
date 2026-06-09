@@ -116,7 +116,7 @@ function SortableTab({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`group flex h-9 max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/10 px-3 text-xs transition-colors ${
+      className={`no-drag group flex h-9 max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/10 px-3 text-xs transition-colors ${
         isActive
           ? 'bg-[#090d19] text-gray-100'
           : 'bg-[#0b1020] text-gray-400 hover:bg-[#0d1525] hover:text-gray-200'
@@ -486,7 +486,7 @@ export default function App() {
       {/* エディタ領域 */}
       <section className="flex min-w-0 flex-1 flex-col">
         {/* タブバー */}
-        <div className="flex h-9 items-stretch overflow-x-auto border-b border-white/10 bg-[#0b1020]" style={{ scrollbarWidth: 'none' }}>
+        <div className="drag-area flex h-9 items-stretch overflow-x-auto border-b border-white/10 bg-[#0b1020]" style={{ scrollbarWidth: 'none' }}>
           <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
             <SortableContext items={openTabs.map((t) => t.name)} strategy={horizontalListSortingStrategy}>
               {openTabs.map((tab) => (
@@ -500,9 +500,8 @@ export default function App() {
               ))}
             </SortableContext>
           </DndContext>
-          {openTabs.length === 0 && (
-            <span className="flex items-center px-4 text-xs text-gray-600">ノートを選択して開いてください</span>
-          )}
+          {/* タブがない or タブより右の空き領域がドラッグ可能 */}
+          <div className="drag-area min-w-[40px] flex-1" />
         </div>
 
         {/* エディタツールバー */}
