@@ -375,8 +375,8 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     // 簡易的な初期2D配置
     subGraph.nodes().forEach((node, index) => {
       const angle = (Math.PI * 2 * index) / Math.max(subGraph.order, 1);
-      subGraph.setNodeAttribute(node, 'x', Math.cos(angle) * 10);
-      subGraph.setNodeAttribute(node, 'y', Math.sin(angle) * 10);
+      subGraph.setNodeAttribute(node, 'x', Math.cos(angle) * 100);
+      subGraph.setNodeAttribute(node, 'y', Math.sin(angle) * 100);
     });
 
     const sigma = new Sigma(subGraph, containerRef2D.current, {
