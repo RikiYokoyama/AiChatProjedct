@@ -18,6 +18,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@google/genai": "latest",
+    "@types/three": "0.184.1",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",
     "lucide-react": "^0.435.0",
@@ -26,7 +27,8 @@
     "react-markdown": "^9.0.1",
     "remark-gfm": "^4.0.0",
     "sigma": "^3.0.3",
-    "simple-git": "^3.25.0"
+    "simple-git": "^3.25.0",
+    "three": "0.184.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.9",
