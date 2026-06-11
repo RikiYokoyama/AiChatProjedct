@@ -396,12 +396,17 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       if (found) onSelectNote(found);
     });
 
-    // 2D用リアルタイムフレーム力学計算
+    // 2D用リアルタイムフレーム力学計算 (力強さを3Dと同等に抑制し、かつ不要な描画更新を間引いて点滅を防止)
     let animationFrameId2D: number;
+    let frameCounter = 0;
+
     const animate2D = () => {
-      const repulsionStrength = settings.repulsion * 1.5;
-      const attractionStrength = settings.linkForce * 0.08;
-      const centerStrength = settings.centerForce * 0.05;
+      // 3Dと同等の穏やかな係数に減衰
+      const repulsionStrength = settings.repulsion * 0.05;
+      const attractionStrength = settings.linkForce * 0.01;
+      const centerStrength = settings.centerForce * 0.005;
+
+      let totalPosDiff = 0;
 
       // 1. 反発力
       for (let i = 0; i < nodesArray.length; i++) {
@@ -417,18 +422,20 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           let dx = ax - bx;
           let dy = ay - by;
           let distSq = dx * dx + dy * dy || 0.01;
-          const minDist = settings.linkDistance * 4.0; // 2D座標空間スケールに適合
+          const minDist = settings.linkDistance * 1.5;
 
           if (distSq < minDist * minDist) {
             const dist = Math.sqrt(distSq);
-            const force = (repulsionStrength * (minDist - dist)) / dist;
-            const fx = dx * force * 0.1;
-            const fy = dy * force * 0.1;
+            // 係数を大幅に減衰
+            const force = (repulsionStrength * (minDist - dist)) / (dist * 10);
+            const fx = dx * force;
+            const fy = dy * force;
 
             subGraph.setNodeAttribute(nodeA, 'x', ax + fx);
             subGraph.setNodeAttribute(nodeA, 'y', ay + fy);
             subGraph.setNodeAttribute(nodeB, 'x', bx - fx);
             subGraph.setNodeAttribute(nodeB, 'y', by - fy);
+            totalPosDiff += Math.abs(fx) + Math.abs(fy);
           }
         }
       }
@@ -443,10 +450,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         let dx = bx - ax;
         let dy = by - ay;
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const targetDist = settings.linkDistance * 3.0;
+        const targetDist = settings.linkDistance * 1.2;
 
         if (dist > targetDist) {
-          const force = attractionStrength * (dist - targetDist);
+          const force = attractionStrength * (dist - targetDist) * 0.2;
           const fx = (dx / dist) * force;
           const fy = (dy / dist) * force;
 
@@ -454,6 +461,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           subGraph.setNodeAttribute(source, 'y', ay + fy);
           subGraph.setNodeAttribute(target, 'x', bx - fx);
           subGraph.setNodeAttribute(target, 'y', by - fy);
+          totalPosDiff += Math.abs(fx) + Math.abs(fy);
         }
       });
 
@@ -461,11 +469,20 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       nodesArray.forEach((node) => {
         const x = subGraph.getNodeAttribute(node, 'x') as number;
         const y = subGraph.getNodeAttribute(node, 'y') as number;
-        subGraph.setNodeAttribute(node, 'x', x * (1 - centerStrength));
-        subGraph.setNodeAttribute(node, 'y', y * (1 - centerStrength));
+        const dx = x * centerStrength;
+        const dy = y * centerStrength;
+        subGraph.setNodeAttribute(node, 'x', x - dx);
+        subGraph.setNodeAttribute(node, 'y', y - dy);
+        totalPosDiff += Math.abs(dx) + Math.abs(dy);
       });
 
-      sigma.refresh();
+      // 変化量が非常に小さいか、毎フレーム再レンダリングするのを避けて点滅を防ぐ
+      // 画面更新は2フレームに1回に間引き（レンダラ負荷とWebGLバッファ転送の抑制）かつ、動きがある時のみリフレッシュ
+      frameCounter++;
+      if (frameCounter % 2 === 0 && totalPosDiff > 0.01) {
+        sigma.refresh();
+      }
+
       animationFrameId2D = requestAnimationFrame(animate2D);
     };
 
