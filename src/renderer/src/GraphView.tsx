@@ -764,15 +764,15 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="no-drag flex items-center gap-2">
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className={`rounded p-2 transition-colors ${showSettings ? 'bg-indigo-600 text-white' : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-gray-200'}`}
+            className="no-drag rounded p-2 transition-colors bg-white/5 hover:bg-white/10 text-gray-400 hover:text-gray-200"
             title="設定"
           >
             <Settings className="h-4 w-4" />
           </button>
-          <button className="rounded bg-white/5 p-2 hover:bg-white/10" onClick={onClose} title="閉じる">
+          <button className="no-drag rounded bg-white/5 p-2 hover:bg-white/10" onClick={onClose} title="閉じる">
             <X className="h-4 w-4" />
           </button>
         </div>
