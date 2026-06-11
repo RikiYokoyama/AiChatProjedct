@@ -58,7 +58,7 @@ const emptyConfig: AppConfig = {
   autoSync: false,
 };
 
-type RibbonView = 'notes' | 'graph' | 'settings';
+type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph';
 
 function cleanFilename(value: string) {
   const name = value.trim().replace(/[\\/:*?"<>|]/g, '-');
@@ -155,6 +155,7 @@ export default function App() {
   }, []);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [ribbonView, setRibbonView] = useState<RibbonView>('notes');
+  const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
   const [showNewNoteModal, setShowNewNoteModal] = useState(false);
   const [newNoteName, setNewNoteName] = useState('Untitled');
   const [isLoading, setIsLoading] = useState(true);
@@ -527,6 +528,19 @@ export default function App() {
           </div>
         )}
 
+        {/* ローカルグラフビュー（全画面オーバーレイ） */}
+        {ribbonView === 'local-graph' && localGraphTarget && (
+          <div className="absolute inset-0 left-12 z-40">
+            <GraphView
+              notes={notes}
+              onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
+              onClose={() => setRibbonView('notes')}
+              isLocal={true}
+              centerNoteName={localGraphTarget}
+            />
+          </div>
+        )}
+
         {/* ノートリスト */}
         <aside className="flex w-64 shrink-0 flex-col border-r border-white/10 bg-[#0b1020]/70">
           <div className="space-y-2 p-3">
@@ -608,6 +622,19 @@ export default function App() {
               {gitError && <p className="truncate text-xs text-red-300">{gitError}</p>}
             </div>
             <div className="flex items-center gap-1">
+              <button
+                className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
+                onClick={() => {
+                  if (selectedNote) {
+                    setLocalGraphTarget(selectedNote.name);
+                    setRibbonView('local-graph');
+                  }
+                }}
+                disabled={!selectedNote}
+                title="ローカルグラフを開く"
+              >
+                <Network className="h-4 w-4" />
+              </button>
               <button
                 className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
                 onClick={() => setEditMode(editMode === 'edit' ? 'preview' : 'edit')}
