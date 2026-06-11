@@ -732,333 +732,339 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   }, [graph, activeElements, viewMode, settings, groupRules, notes, onSelectNote]);
 
   return (
-    <div className="h-screen bg-[#070a13] text-gray-100 flex flex-col relative select-none">
-      <header className="flex h-12 items-center justify-between border-b border-white/10 bg-[#0b1020] px-4 z-20 shrink-0">
-        <div className="flex items-center gap-6">
-          <div className="flex flex-col">
-            <h1 className="font-semibold text-sm">
-              {isLocal ? `ローカルグラフ: ${centerNoteName?.replace(/\.md$/i, '')}` : 'ノートグラフ'}
-            </h1>
-            <p className="text-[10px] text-gray-400">
-              {activeElements.nodes.length} nodes / {activeElements.edges.length} links
-            </p>
+    <div className="h-screen bg-[#070a13] text-gray-100 flex relative select-none">
+      {/* 左上フローティングラベル情報 */}
+      <div className="absolute top-4 left-4 z-20 pointer-events-none bg-[#0b1020]/90 border border-white/10 rounded-lg p-3 shadow-xl backdrop-blur-md">
+        <h1 className="font-semibold text-xs text-gray-200">
+          {isLocal ? `ローカルグラフ: ${centerNoteName?.replace(/\.md$/i, '')}` : 'ノートグラフ'}
+        </h1>
+        <p className="text-[10px] text-gray-400 mt-0.5">
+          {activeElements.nodes.length} nodes / {activeElements.edges.length} links
+        </p>
+      </div>
+
+      {/* スライドイン設定パネル */}
+      {showSettings && (
+        <div className="absolute left-0 top-0 bottom-0 w-80 bg-[#0b1020]/95 border-r border-white/10 z-30 overflow-y-auto p-4 backdrop-blur-md flex flex-col gap-4 text-xs">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <span className="font-semibold text-gray-200 text-sm">グラフ設定</span>
+            <button
+              onClick={resetToDefaults}
+              className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-indigo-400 transition-colors"
+              title="デフォルトに戻す"
+            >
+              <RotateCcw className="w-3 h-3" />
+              デフォルトに戻す
+            </button>
           </div>
-          <div className="no-drag flex items-center bg-[#070a13] border border-white/10 rounded-full p-0.5">
+
+          {/* ローカルグラフ専用設定 */}
+          {isLocal && (
+            <div className="space-y-1 bg-indigo-950/20 p-2 rounded border border-indigo-500/20">
+              <span className="font-medium text-indigo-300 block mb-1">ローカル設定</span>
+              <div className="flex justify-between text-[10px] text-gray-400">
+                <span>接続の深さ</span>
+                <span>{localDepth}</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="5"
+                step="1"
+                value={localDepth}
+                onChange={(e) => setLocalDepth(Number(e.target.value))}
+                className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+              />
+            </div>
+          )}
+
+          {/* フィルタ */}
+          <div className="space-y-2">
+            <span className="font-medium text-gray-300 block">フィルタ</span>
+            <div className="space-y-1.5">
+              <input
+                type="text"
+                placeholder="ファイルを検索..."
+                value={settings.searchQuery}
+                onChange={(e) => setSettings({ ...settings, searchQuery: e.target.value })}
+                className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 outline-none text-gray-200 focus:border-indigo-500"
+              />
+              <input
+                type="text"
+                placeholder="除外ファイルパターン..."
+                value={settings.excludePattern}
+                onChange={(e) => setSettings({ ...settings, excludePattern: e.target.value })}
+                className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 outline-none text-gray-200 focus:border-indigo-500"
+              />
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.showTags}
+                  onChange={(e) => setSettings({ ...settings, showTags: e.target.checked })}
+                  className="rounded text-indigo-600 bg-black/40 border-white/10"
+                />
+                タグを表示
+              </label>
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.existingOnly}
+                  onChange={(e) => setSettings({ ...settings, existingOnly: e.target.checked })}
+                  className="rounded text-indigo-600 bg-black/40 border-white/10"
+                />
+                存在するファイルのみ表示
+              </label>
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.showOrphans}
+                  onChange={(e) => setSettings({ ...settings, showOrphans: e.target.checked })}
+                  className="rounded text-indigo-600 bg-black/40 border-white/10"
+                />
+                オーファン（孤立点）を表示
+              </label>
+            </div>
+          </div>
+
+          {/* グループ */}
+          <div className="space-y-2">
+            <span className="font-medium text-gray-300 block">グループ</span>
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                placeholder="検索クエリ (タグ等)..."
+                value={newGroupQuery}
+                onChange={(e) => setNewGroupQuery(e.target.value)}
+                className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 outline-none text-gray-200 text-[11px]"
+              />
+              <input
+                type="color"
+                value={newGroupColor}
+                onChange={(e) => setNewGroupColor(e.target.value)}
+                className="w-6 h-6 border border-white/10 rounded cursor-pointer bg-transparent"
+              />
+              <button
+                onClick={addGroupRule}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white rounded p-1"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-1 max-h-24 overflow-y-auto">
+              {groupRules.map((rule, idx) => (
+                <div key={idx} className="flex items-center justify-between bg-black/20 p-1.5 rounded border border-white/5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: rule.color }} />
+                    <span className="truncate max-w-[150px]">{rule.query}</span>
+                  </div>
+                  <button onClick={() => removeGroupRule(idx)} className="text-red-400 hover:text-red-300">
+                    <Trash className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 表示 */}
+          <div className="space-y-2">
+            <span className="font-medium text-gray-300 block">表示</span>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.showArrows}
+                  onChange={(e) => setSettings({ ...settings, showArrows: e.target.checked })}
+                  className="rounded text-indigo-600 bg-black/40 border-white/10"
+                />
+                接続の矢印表示
+              </label>
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>ノードの大きさ</span>
+                  <span>{settings.nodeSize.toFixed(1)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="3"
+                  step="0.1"
+                  value={settings.nodeSize}
+                  onChange={(e) => setSettings({ ...settings, nodeSize: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>リンクの太さ</span>
+                  <span>{settings.linkThickness.toFixed(1)}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="5"
+                  step="0.1"
+                  value={settings.linkThickness}
+                  onChange={(e) => setSettings({ ...settings, linkThickness: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>テキスト表示閾値</span>
+                  <span>{settings.textFadeThreshold}</span>
+                </div>
+                <input
+                  type="range"
+                  min="5"
+                  max="50"
+                  step="1"
+                  value={settings.textFadeThreshold}
+                  onChange={(e) => setSettings({ ...settings, textFadeThreshold: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 力の強さ */}
+          <div className="space-y-2">
+            <span className="font-medium text-gray-300 block">力の強さ</span>
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>中心力</span>
+                  <span>{settings.centerForce.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={settings.centerForce}
+                  onChange={(e) => setSettings({ ...settings, centerForce: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>反発力</span>
+                  <span>{settings.repulsion.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="3"
+                  step="0.1"
+                  value={settings.repulsion}
+                  onChange={(e) => setSettings({ ...settings, repulsion: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>リンクする力</span>
+                  <span>{settings.linkForce.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="3"
+                  step="0.1"
+                  value={settings.linkForce}
+                  onChange={(e) => setSettings({ ...settings, linkForce: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-gray-400">
+                  <span>リンク距離</span>
+                  <span>{settings.linkDistance}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="5"
+                  max="40"
+                  step="1"
+                  value={settings.linkDistance}
+                  onChange={(e) => setSettings({ ...settings, linkDistance: Number(e.target.value) })}
+                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* タイムラプスアニメーション */}
+          <div className="pt-2 border-t border-white/10 space-y-2">
+            <span className="font-medium text-gray-300 block">タイムラプスアニメーション</span>
+            <button
+              onClick={() => setTimelapseActive(true)}
+              disabled={timelapseActive}
+              className="w-full flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded py-2 font-semibold transition-colors disabled:opacity-40"
+            >
+              <Play className="w-3.5 h-3.5" />
+              アニメーション開始
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* グラフ描画エリア */}
+      <div className="flex-1 h-full relative min-h-[300px]">
+        <div className={`w-full h-full min-h-[300px] ${viewMode === '2D' ? '' : 'hidden'}`} ref={containerRef2D} />
+        <div className={`w-full h-full min-h-[300px] relative ${viewMode === '3D' ? '' : 'hidden'}`}>
+          <div className="w-full h-full cursor-grab active:cursor-grabbing" ref={containerRef3D} />
+          <div
+            ref={tooltipRef}
+            style={{ display: 'none' }}
+            className="absolute pointer-events-none bg-[#0b1020]/95 border border-indigo-500/30 text-indigo-200 text-xs py-1.5 px-3 rounded shadow-xl font-medium backdrop-blur-md z-20"
+          />
+          <div className="absolute bottom-4 left-4 pointer-events-none bg-[#0b1020]/80 border border-white/5 text-gray-400 text-[10px] py-1.5 px-3 rounded backdrop-blur z-20 space-y-0.5">
+            <p>左ドラッグ：カメラ回転</p>
+            <p>右ドラッグ：カメラ並行移動</p>
+            <p>ホイール　：ズーム</p>
+          </div>
+        </div>
+
+        {/* 右下フローティング操作パネル (B案) */}
+        <div className="absolute bottom-4 right-4 z-20 flex items-center gap-3 bg-[#0b1020]/90 border border-white/10 rounded-lg p-2 shadow-2xl backdrop-blur-md no-drag">
+          <div className="flex items-center bg-[#070a13] border border-white/10 rounded-full p-0.5">
             <button
               onClick={() => setViewMode('2D')}
-              className={`no-drag flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${
                 viewMode === '2D' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-200'
               }`}
             >
-              <Eye className="w-3.5 h-3.5" />
+              <Eye className="w-3 h-3" />
               2D
             </button>
             <button
               onClick={() => setViewMode('3D')}
-              className={`no-drag flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${
                 viewMode === '3D' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-gray-200'
               }`}
             >
-              <Video className="w-3.5 h-3.5" />
+              <Video className="w-3 h-3" />
               3D
             </button>
           </div>
-        </div>
-        <div className="no-drag flex items-center gap-2">
+
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="no-drag rounded p-2 transition-colors bg-white/5 hover:bg-white/10 text-gray-400 hover:text-gray-200"
+            className={`rounded p-1.5 transition-colors ${showSettings ? 'bg-indigo-600 text-white' : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-gray-200'}`}
             title="設定"
           >
-            <Settings className="h-4 w-4" />
+            <Settings className="w-3.5 h-3.5" />
           </button>
-          <button className="no-drag rounded bg-white/5 p-2 hover:bg-white/10" onClick={onClose} title="閉じる">
-            <X className="h-4 w-4" />
+
+          <div className="w-px h-5 bg-white/10" />
+
+          <button
+            onClick={onClose}
+            className="rounded bg-white/5 p-1.5 hover:bg-white/10 text-gray-400 hover:text-gray-200"
+            title="閉じる"
+          >
+            <X className="w-3.5 h-3.5" />
           </button>
-        </div>
-      </header>
-
-      <div className="flex-1 w-full relative min-h-0 flex">
-        {/* スライドイン設定パネル */}
-        {showSettings && (
-          <div className="absolute left-0 top-0 bottom-0 w-80 bg-[#0b1020]/95 border-r border-white/10 z-30 overflow-y-auto p-4 backdrop-blur-md flex flex-col gap-4 text-xs">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <span className="font-semibold text-gray-200 text-sm">グラフ設定</span>
-              <button
-                onClick={resetToDefaults}
-                className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-indigo-400 transition-colors"
-                title="デフォルトに戻す"
-              >
-                <RotateCcw className="w-3 h-3" />
-                デフォルトに戻す
-              </button>
-            </div>
-
-            {/* ローカルグラフ専用設定 */}
-            {isLocal && (
-              <div className="space-y-1 bg-indigo-950/20 p-2 rounded border border-indigo-500/20">
-                <span className="font-medium text-indigo-300 block mb-1">ローカル設定</span>
-                <div className="flex justify-between text-[10px] text-gray-400">
-                  <span>接続の深さ</span>
-                  <span>{localDepth}</span>
-                </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="5"
-                  step="1"
-                  value={localDepth}
-                  onChange={(e) => setLocalDepth(Number(e.target.value))}
-                  className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                />
-              </div>
-            )}
-
-            {/* フィルタ */}
-            <div className="space-y-2">
-              <span className="font-medium text-gray-300 block">フィルタ</span>
-              <div className="space-y-1.5">
-                <input
-                  type="text"
-                  placeholder="ファイルを検索..."
-                  value={settings.searchQuery}
-                  onChange={(e) => setSettings({ ...settings, searchQuery: e.target.value })}
-                  className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 outline-none text-gray-200 focus:border-indigo-500"
-                />
-                <input
-                  type="text"
-                  placeholder="除外ファイルパターン..."
-                  value={settings.excludePattern}
-                  onChange={(e) => setSettings({ ...settings, excludePattern: e.target.value })}
-                  className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 outline-none text-gray-200 focus:border-indigo-500"
-                />
-                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.showTags}
-                    onChange={(e) => setSettings({ ...settings, showTags: e.target.checked })}
-                    className="rounded text-indigo-600 bg-black/40 border-white/10"
-                  />
-                  タグを表示
-                </label>
-                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.existingOnly}
-                    onChange={(e) => setSettings({ ...settings, existingOnly: e.target.checked })}
-                    className="rounded text-indigo-600 bg-black/40 border-white/10"
-                  />
-                  存在するファイルのみ表示
-                </label>
-                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.showOrphans}
-                    onChange={(e) => setSettings({ ...settings, showOrphans: e.target.checked })}
-                    className="rounded text-indigo-600 bg-black/40 border-white/10"
-                  />
-                  オーファン（孤立点）を表示
-                </label>
-              </div>
-            </div>
-
-            {/* グループ */}
-            <div className="space-y-2">
-              <span className="font-medium text-gray-300 block">グループ</span>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  placeholder="検索クエリ (タグ等)..."
-                  value={newGroupQuery}
-                  onChange={(e) => setNewGroupQuery(e.target.value)}
-                  className="flex-1 bg-black/40 border border-white/10 rounded px-2 py-1 outline-none text-gray-200 text-[11px]"
-                />
-                <input
-                  type="color"
-                  value={newGroupColor}
-                  onChange={(e) => setNewGroupColor(e.target.value)}
-                  className="w-6 h-6 border border-white/10 rounded cursor-pointer bg-transparent"
-                />
-                <button
-                  onClick={addGroupRule}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white rounded p-1"
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="space-y-1 max-h-24 overflow-y-auto">
-                {groupRules.map((rule, idx) => (
-                  <div key={idx} className="flex items-center justify-between bg-black/20 p-1.5 rounded border border-white/5">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: rule.color }} />
-                      <span className="truncate max-w-[150px]">{rule.query}</span>
-                    </div>
-                    <button onClick={() => removeGroupRule(idx)} className="text-red-400 hover:text-red-300">
-                      <Trash className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* 表示 */}
-            <div className="space-y-2">
-              <span className="font-medium text-gray-300 block">表示</span>
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.showArrows}
-                    onChange={(e) => setSettings({ ...settings, showArrows: e.target.checked })}
-                    className="rounded text-indigo-600 bg-black/40 border-white/10"
-                  />
-                  接続の矢印表示
-                </label>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>ノードの大きさ</span>
-                    <span>{settings.nodeSize.toFixed(1)}x</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="3"
-                    step="0.1"
-                    value={settings.nodeSize}
-                    onChange={(e) => setSettings({ ...settings, nodeSize: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>リンクの太さ</span>
-                    <span>{settings.linkThickness.toFixed(1)}px</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="5"
-                    step="0.1"
-                    value={settings.linkThickness}
-                    onChange={(e) => setSettings({ ...settings, linkThickness: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>テキスト表示閾値</span>
-                    <span>{settings.textFadeThreshold}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="5"
-                    max="50"
-                    step="1"
-                    value={settings.textFadeThreshold}
-                    onChange={(e) => setSettings({ ...settings, textFadeThreshold: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* 力の強さ */}
-            <div className="space-y-2">
-              <span className="font-medium text-gray-300 block">力の強さ</span>
-              <div className="space-y-2">
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>中心力</span>
-                    <span>{settings.centerForce.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={settings.centerForce}
-                    onChange={(e) => setSettings({ ...settings, centerForce: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>反発力</span>
-                    <span>{settings.repulsion.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="3"
-                    step="0.1"
-                    value={settings.repulsion}
-                    onChange={(e) => setSettings({ ...settings, repulsion: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>リンクする力</span>
-                    <span>{settings.linkForce.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="3"
-                    step="0.1"
-                    value={settings.linkForce}
-                    onChange={(e) => setSettings({ ...settings, linkForce: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="flex justify-between text-gray-400">
-                    <span>リンク距離</span>
-                    <span>{settings.linkDistance}px</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="5"
-                    max="40"
-                    step="1"
-                    value={settings.linkDistance}
-                    onChange={(e) => setSettings({ ...settings, linkDistance: Number(e.target.value) })}
-                    className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* タイムラプスアニメーション */}
-            <div className="pt-2 border-t border-white/10 space-y-2">
-              <span className="font-medium text-gray-300 block">タイムラプスアニメーション</span>
-              <button
-                onClick={() => setTimelapseActive(true)}
-                disabled={timelapseActive}
-                className="w-full flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded py-2 font-semibold transition-colors disabled:opacity-40"
-              >
-                <Play className="w-3.5 h-3.5" />
-                アニメーション開始
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div className="flex-1 h-full relative min-h-[300px]">
-          <div className={`w-full h-full min-h-[300px] ${viewMode === '2D' ? '' : 'hidden'}`} ref={containerRef2D} />
-          <div className={`w-full h-full min-h-[300px] relative ${viewMode === '3D' ? '' : 'hidden'}`}>
-            <div className="w-full h-full cursor-grab active:cursor-grabbing" ref={containerRef3D} />
-            <div
-              ref={tooltipRef}
-              style={{ display: 'none' }}
-              className="absolute pointer-events-none bg-[#0b1020]/95 border border-indigo-500/30 text-indigo-200 text-xs py-1.5 px-3 rounded shadow-xl font-medium backdrop-blur-md z-20"
-            />
-            <div className="absolute bottom-4 left-4 pointer-events-none bg-[#0b1020]/80 border border-white/5 text-gray-400 text-[10px] py-1.5 px-3 rounded backdrop-blur z-20 space-y-0.5">
-              <p>左ドラッグ：カメラ回転</p>
-              <p>右ドラッグ：カメラ並行移動</p>
-              <p>ホイール　：ズーム</p>
-            </div>
-          </div>
         </div>
       </div>
     </div>
