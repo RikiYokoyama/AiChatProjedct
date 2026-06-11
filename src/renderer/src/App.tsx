@@ -519,7 +519,7 @@ export default function App() {
 
         {/* グラフビュー（全画面オーバーレイ） */}
         {ribbonView === 'graph' && (
-          <div className="absolute inset-0 left-12 z-40">
+          <div className="absolute inset-y-0 bottom-0 left-12 right-0 z-40">
             <GraphView
               notes={notes}
               onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
@@ -530,7 +530,7 @@ export default function App() {
 
         {/* ローカルグラフビュー（全画面オーバーレイ） */}
         {ribbonView === 'local-graph' && localGraphTarget && (
-          <div className="absolute inset-0 left-12 z-40">
+          <div className="absolute inset-y-0 bottom-0 left-12 right-0 z-40">
             <GraphView
               notes={notes}
               onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
