@@ -434,52 +434,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       nodePositions.set(node, pos);
     });
 
-    // 力学計算シミュレーションループ (設定された力のパラメータに基づく)
-    const repulsionStrength = settings.repulsion * 0.2;
-    const attractionStrength = settings.linkForce * 0.05;
-    const centerStrength = settings.centerForce * 0.02;
-
-    for (let iter = 0; iter < 15; iter++) {
-      // 1. ノード間の反発力 (Repulsion)
-      for (let i = 0; i < targetNodes.length; i++) {
-        const nodeA = targetNodes[i];
-        const posA = nodePositions.get(nodeA)!;
-        for (let j = i + 1; j < targetNodes.length; j++) {
-          const nodeB = targetNodes[j];
-          const posB = nodePositions.get(nodeB)!;
-          const dir = new THREE.Vector3().subVectors(posA, posB);
-          const distSq = dir.lengthSq() || 0.01;
-          const minDist = settings.linkDistance * 0.8;
-          if (distSq < minDist * minDist) {
-            dir.normalize().multiplyScalar(repulsionStrength * (minDist - Math.sqrt(distSq)));
-            posA.add(dir);
-            posB.sub(dir);
-          }
-        }
-      }
-
-      // 2. エッジによる引力 (Attraction)
-      targetEdges.forEach(({ source, target }) => {
-        const posA = nodePositions.get(source);
-        const posB = nodePositions.get(target);
-        if (posA && posB) {
-          const dir = new THREE.Vector3().subVectors(posB, posA);
-          const dist = dir.length();
-          if (dist > settings.linkDistance) {
-            dir.normalize().multiplyScalar(attractionStrength * (dist - settings.linkDistance));
-            posA.add(dir);
-            posB.sub(dir);
-          }
-        }
-      });
-
-      // 3. 重心に向かう引力 (Center Force)
-      targetNodes.forEach((node) => {
-        const pos = nodePositions.get(node)!;
-        pos.multiplyScalar(1 - centerStrength);
-      });
-    }
-
     // InstancedMesh を使ったノード描画
     // D3 / Three.js 上でグループ分けに対応した色を管理するため、色のバッファ属性を設定
     const sphereGeometry = new THREE.SphereGeometry(0.6, 16, 16);
@@ -513,7 +467,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       color: 0x475569,
       transparent: true,
       opacity: 0.6,
-      linewidth: settings.linkThickness, // WebGLの実装によっては変化しない場合あり
+      linewidth: settings.linkThickness,
     });
     const lineVertices: number[] = [];
     targetEdges.forEach(({ source, target }) => {
@@ -540,15 +494,11 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         const posB = nodePositions.get(target);
         if (posA && posB) {
           const arrowMesh = new THREE.Mesh(coneGeometry, coneMaterial);
-          // 始点と終点の中間やや終点寄りに配置
           const midPoint = new THREE.Vector3().lerpVectors(posA, posB, 0.7);
           arrowMesh.position.copy(midPoint);
-
-          // 矢印の向きを設定
           const dir = new THREE.Vector3().subVectors(posB, posA).normalize();
           const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
           arrowMesh.setRotationFromQuaternion(quaternion);
-
           scene.add(arrowMesh);
           arrows.push(arrowMesh);
         }
@@ -637,9 +587,93 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     container.addEventListener('click', handleClick);
     container.addEventListener('contextmenu', preventDefault);
 
-    // アニメーションフレーム
+    // アニメーションフレーム (ここで物理計算を毎フレーム行う)
     let animationFrameId: number;
     const animate = () => {
+      // 1. ノード間の反発力 (Repulsion)
+      const repulsionStrength = settings.repulsion * 0.05;
+      const attractionStrength = settings.linkForce * 0.01;
+      const centerStrength = settings.centerForce * 0.005;
+
+      for (let i = 0; i < targetNodes.length; i++) {
+        const nodeA = targetNodes[i];
+        const posA = nodePositions.get(nodeA)!;
+        for (let j = i + 1; j < targetNodes.length; j++) {
+          const nodeB = targetNodes[j];
+          const posB = nodePositions.get(nodeB)!;
+          const dir = new THREE.Vector3().subVectors(posA, posB);
+          const distSq = dir.lengthSq() || 0.01;
+          const minDist = settings.linkDistance * 0.8;
+          if (distSq < minDist * minDist) {
+            dir.normalize().multiplyScalar(repulsionStrength * (minDist - Math.sqrt(distSq)));
+            posA.add(dir);
+            posB.sub(dir);
+          }
+        }
+      }
+
+      // 2. エッジによる引力 (Attraction)
+      targetEdges.forEach(({ source, target }) => {
+        const posA = nodePositions.get(source);
+        const posB = nodePositions.get(target);
+        if (posA && posB) {
+          const dir = new THREE.Vector3().subVectors(posB, posA);
+          const dist = dir.length();
+          if (dist > settings.linkDistance) {
+            dir.normalize().multiplyScalar(attractionStrength * (dist - settings.linkDistance));
+            posA.add(dir);
+            posB.sub(dir);
+          }
+        }
+      });
+
+      // 3. 重心に向かう引力 (Center Force)
+      targetNodes.forEach((node) => {
+        const pos = nodePositions.get(node)!;
+        pos.multiplyScalar(1 - centerStrength);
+      });
+
+      // ノードの3D位置行列およびエッジの線を更新
+      targetNodes.forEach((node, i) => {
+        const pos = nodePositions.get(node)!;
+        const baseScale = graph.getNodeAttribute(node, 'size') / 8.0;
+        tempObject.position.copy(pos);
+        tempObject.scale.setScalar(baseScale * settings.nodeSize);
+        tempObject.updateMatrix();
+        instancedMesh.setMatrixAt(i, tempObject.matrix);
+      });
+      instancedMesh.instanceMatrix.needsUpdate = true;
+
+      // エッジの頂点座標バッファの更新
+      const positionsAttr = lineGeometry.getAttribute('position') as THREE.BufferAttribute;
+      let lineIdx = 0;
+      targetEdges.forEach(({ source, target }) => {
+        const posA = nodePositions.get(source);
+        const posB = nodePositions.get(target);
+        if (posA && posB) {
+          positionsAttr.setXYZ(lineIdx++, posA.x, posA.y, posA.z);
+          positionsAttr.setXYZ(lineIdx++, posB.x, posB.y, posB.z);
+        }
+      });
+      positionsAttr.needsUpdate = true;
+
+      // 矢印位置と方向の更新
+      if (settings.showArrows) {
+        let arrowIdx = 0;
+        targetEdges.forEach(({ source, target }) => {
+          const posA = nodePositions.get(source);
+          const posB = nodePositions.get(target);
+          if (posA && posB && arrows[arrowIdx]) {
+            const arrowMesh = arrows[arrowIdx++];
+            const midPoint = new THREE.Vector3().lerpVectors(posA, posB, 0.7);
+            arrowMesh.position.copy(midPoint);
+            const dir = new THREE.Vector3().subVectors(posB, posA).normalize();
+            const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+            arrowMesh.setRotationFromQuaternion(quaternion);
+          }
+        });
+      }
+
       rotation.x += (targetRotation.x - rotation.x) * 0.1;
       rotation.y += (targetRotation.y - rotation.y) * 0.1;
       distance += (targetDistance - distance) * 0.1;
@@ -679,7 +713,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       } else {
         hoveredIndex = null;
         if (tooltipRef.current) {
-          // ホバーがない場合でも、ズーム距離に応じて簡易的に中心付近のノード名などを表示させたり、ツールチップを閉じる
           tooltipRef.current.style.display = 'none';
         }
       }
