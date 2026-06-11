@@ -1047,24 +1047,20 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         )}
 
         <div className="flex-1 h-full relative">
-          {viewMode === '2D' && (
-            <div className="w-full h-full" ref={containerRef2D} />
-          )}
-          {viewMode === '3D' && (
-            <>
-              <div className="w-full h-full cursor-grab active:cursor-grabbing" ref={containerRef3D} />
-              <div
-                ref={tooltipRef}
-                style={{ display: 'none' }}
-                className="absolute pointer-events-none bg-[#0b1020]/95 border border-indigo-500/30 text-indigo-200 text-xs py-1.5 px-3 rounded shadow-xl font-medium backdrop-blur-md z-20"
-              />
-              <div className="absolute bottom-4 left-4 pointer-events-none bg-[#0b1020]/80 border border-white/5 text-gray-400 text-[10px] py-1.5 px-3 rounded backdrop-blur z-20 space-y-0.5">
-                <p>左ドラッグ：カメラ回転</p>
-                <p>右ドラッグ：カメラ並行移動</p>
-                <p>ホイール　：ズーム</p>
-              </div>
-            </>
-          )}
+          <div className={`w-full h-full ${viewMode === '2D' ? '' : 'hidden'}`} ref={containerRef2D} />
+          <div className={`w-full h-full relative ${viewMode === '3D' ? '' : 'hidden'}`}>
+            <div className="w-full h-full cursor-grab active:cursor-grabbing" ref={containerRef3D} />
+            <div
+              ref={tooltipRef}
+              style={{ display: 'none' }}
+              className="absolute pointer-events-none bg-[#0b1020]/95 border border-indigo-500/30 text-indigo-200 text-xs py-1.5 px-3 rounded shadow-xl font-medium backdrop-blur-md z-20"
+            />
+            <div className="absolute bottom-4 left-4 pointer-events-none bg-[#0b1020]/80 border border-white/5 text-gray-400 text-[10px] py-1.5 px-3 rounded backdrop-blur z-20 space-y-0.5">
+              <p>左ドラッグ：カメラ回転</p>
+              <p>右ドラッグ：カメラ並行移動</p>
+              <p>ホイール　：ズーム</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
