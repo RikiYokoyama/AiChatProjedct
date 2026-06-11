@@ -388,10 +388,10 @@ export default function GraphView({ notes, onSelectNote, onClose }: GraphViewPro
             <h1 className="font-semibold">ノートグラフ</h1>
             <p className="text-xs text-gray-400">{notes.length} notes / {graph.size} links</p>
           </div>
-          <div className="flex items-center bg-[#070a13] border border-white/10 rounded-full p-0.5">
+          <div className="no-drag flex items-center bg-[#070a13] border border-white/10 rounded-full p-0.5">
             <button
               onClick={() => setViewMode('2D')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              className={`no-drag flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
                 viewMode === '2D'
                   ? 'bg-indigo-600 text-white shadow-lg'
                   : 'text-gray-400 hover:text-gray-200'
@@ -402,7 +402,7 @@ export default function GraphView({ notes, onSelectNote, onClose }: GraphViewPro
             </button>
             <button
               onClick={() => setViewMode('3D')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
+              className={`no-drag flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all ${
                 viewMode === '3D'
                   ? 'bg-indigo-600 text-white shadow-lg'
                   : 'text-gray-400 hover:text-gray-200'
