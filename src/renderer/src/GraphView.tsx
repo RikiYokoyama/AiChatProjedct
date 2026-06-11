@@ -369,6 +369,12 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       subGraph.addEdge(edge.source, edge.target, graph.getEdgeAttributes(edge.id));
     });
 
+    const nodesArray = subGraph.nodes();
+    const edgesArray = subGraph.edges().map((edge) => {
+      const ext = subGraph.extremities(edge);
+      return { source: ext[0], target: ext[1] };
+    });
+
     // 簡易的な初期2D配置
     subGraph.nodes().forEach((node, index) => {
       const angle = (Math.PI * 2 * index) / Math.max(subGraph.order, 1);
@@ -390,11 +396,87 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       if (found) onSelectNote(found);
     });
 
+    // 2D用リアルタイムフレーム力学計算
+    let animationFrameId2D: number;
+    const animate2D = () => {
+      const repulsionStrength = settings.repulsion * 1.5;
+      const attractionStrength = settings.linkForce * 0.08;
+      const centerStrength = settings.centerForce * 0.05;
+
+      // 1. 反発力
+      for (let i = 0; i < nodesArray.length; i++) {
+        const nodeA = nodesArray[i];
+        const ax = subGraph.getNodeAttribute(nodeA, 'x') as number;
+        const ay = subGraph.getNodeAttribute(nodeA, 'y') as number;
+
+        for (let j = i + 1; j < nodesArray.length; j++) {
+          const nodeB = nodesArray[j];
+          const bx = subGraph.getNodeAttribute(nodeB, 'x') as number;
+          const by = subGraph.getNodeAttribute(nodeB, 'y') as number;
+
+          let dx = ax - bx;
+          let dy = ay - by;
+          let distSq = dx * dx + dy * dy || 0.01;
+          const minDist = settings.linkDistance * 4.0; // 2D座標空間スケールに適合
+
+          if (distSq < minDist * minDist) {
+            const dist = Math.sqrt(distSq);
+            const force = (repulsionStrength * (minDist - dist)) / dist;
+            const fx = dx * force * 0.1;
+            const fy = dy * force * 0.1;
+
+            subGraph.setNodeAttribute(nodeA, 'x', ax + fx);
+            subGraph.setNodeAttribute(nodeA, 'y', ay + fy);
+            subGraph.setNodeAttribute(nodeB, 'x', bx - fx);
+            subGraph.setNodeAttribute(nodeB, 'y', by - fy);
+          }
+        }
+      }
+
+      // 2. リンクの引力
+      edgesArray.forEach(({ source, target }) => {
+        const ax = subGraph.getNodeAttribute(source, 'x') as number;
+        const ay = subGraph.getNodeAttribute(source, 'y') as number;
+        const bx = subGraph.getNodeAttribute(target, 'x') as number;
+        const by = subGraph.getNodeAttribute(target, 'y') as number;
+
+        let dx = bx - ax;
+        let dy = by - ay;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const targetDist = settings.linkDistance * 3.0;
+
+        if (dist > targetDist) {
+          const force = attractionStrength * (dist - targetDist);
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+
+          subGraph.setNodeAttribute(source, 'x', ax + fx);
+          subGraph.setNodeAttribute(source, 'y', ay + fy);
+          subGraph.setNodeAttribute(target, 'x', bx - fx);
+          subGraph.setNodeAttribute(target, 'y', by - fy);
+        }
+      });
+
+      // 3. 中心引力
+      nodesArray.forEach((node) => {
+        const x = subGraph.getNodeAttribute(node, 'x') as number;
+        const y = subGraph.getNodeAttribute(node, 'y') as number;
+        subGraph.setNodeAttribute(node, 'x', x * (1 - centerStrength));
+        subGraph.setNodeAttribute(node, 'y', y * (1 - centerStrength));
+      });
+
+      sigma.refresh();
+      animationFrameId2D = requestAnimationFrame(animate2D);
+    };
+
+    animate2D();
+
     return () => {
+      cancelAnimationFrame(animationFrameId2D);
       sigma.kill();
       sigmaRef.current = null;
     };
-  }, [graph, activeElements, viewMode, notes, onSelectNote]);
+  }, [graph, activeElements, viewMode, settings, notes, onSelectNote]);
 
   // 3D Three.js rendering update
   useEffect(() => {
