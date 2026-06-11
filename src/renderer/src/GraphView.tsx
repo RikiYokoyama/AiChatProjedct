@@ -1046,9 +1046,9 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           </div>
         )}
 
-        <div className="flex-1 h-full relative">
-          <div className={`w-full h-full ${viewMode === '2D' ? '' : 'hidden'}`} ref={containerRef2D} />
-          <div className={`w-full h-full relative ${viewMode === '3D' ? '' : 'hidden'}`}>
+        <div className="flex-1 h-full relative min-h-[300px]">
+          <div className={`w-full h-full min-h-[300px] ${viewMode === '2D' ? '' : 'hidden'}`} ref={containerRef2D} />
+          <div className={`w-full h-full min-h-[300px] relative ${viewMode === '3D' ? '' : 'hidden'}`}>
             <div className="w-full h-full cursor-grab active:cursor-grabbing" ref={containerRef3D} />
             <div
               ref={tooltipRef}
