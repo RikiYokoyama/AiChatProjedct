@@ -384,6 +384,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       defaultEdgeColor: '#334155',
       defaultNodeColor: '#a5b4fc',
       labelColor: { color: '#dbeafe' },
+      allowInvalidContainer: true,
     });
     sigmaRef.current = sigma;
 
