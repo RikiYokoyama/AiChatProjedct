@@ -227,7 +227,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         label: id,
         size: settings.nodeSize * 8,
         color: color,
-        type: 'note',
         updatedAt: note.updatedAt,
       });
     });
@@ -259,7 +258,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           label: tagNodeId,
           size: settings.nodeSize * 6,
           color: color,
-          type: 'tag',
         });
 
         // タグから各ノートへのリンクを追加
@@ -290,7 +288,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             label: target,
             size: settings.nodeSize * 5,
             color: color,
-            type: 'ghost',
           });
         }
 
