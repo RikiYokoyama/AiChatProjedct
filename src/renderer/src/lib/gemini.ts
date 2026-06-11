@@ -14,9 +14,9 @@ const MODEL_CANDIDATES: Record<AiModelMode, string[]> = {
 };
 
 const SYSTEM_PROMPTS: Record<ChatMode, string> = {
-  'deep-think': 'ユーザーの質問に対して、事実確認を重視しながら具体的で実用的に回答してください。',
-  'markdown-struct': '入力内容をObsidianで使いやすいMarkdownに整理してください。見出し、箇条書き、必要ならtagsを付けてください。',
-  'long-explain': '背景、仕組み、具体例、注意点を含めて、読み手が理解できるように詳しく説明してください。',
+  'deep-think': 'ユーザーの質問やテーマに対して前提知識を含めて徹底的に深掘りし、実質的な答えや解決策を必ず提示してください。回答内容は、最新の情報であるか、また事実関係が正確であるかを厳格にファクトチェックした上で、不確かな憶測を避けて信頼性の高い内容を作成してください。出力全体の長さは、Markdown記号等も含めて200文字〜500文字程度に収まるよう要約し、簡潔に回答してください。',
+  'markdown-struct': 'バラバラのメモを綺麗に構造化し、そのままObsidianに貼り付けられる美しいMarkdown（見出し・箇条書き・要約・末尾に `tags: [タグ名]`）で出力してください。また、出力する文章全体の長さは、Markdown記号等も含めて200文字〜500文字程度に収まるように要約して構成してください。',
+  'long-explain': '提示されたテーマについて、前提知識がない読者でも深く理解できるよう、網羅的で詳細な解説記事（目安：1000文字〜5000文字程度）を作成してください。単に要約するのではなく、背景、仕組み、具体例、メリット・デメリット、今後の展望まで詳細に執筆してください。箇条書きだけで終わらせず、各項目ごとに複数の段落を用いて丁寧な解説文（地の文）を記述してください。また、提供する情報はできる限り最新かつ正確な事実に基づいているか（ファクトチェック）を自ら厳格に検証した上で、信頼性の高い根拠を基に記述してください。'
 };
 
 export async function generateNoteTitle(apiKey: string, userPrompt: string, aiReply: string): Promise<string> {
@@ -40,7 +40,7 @@ export async function generateNoteTitle(apiKey: string, userPrompt: string, aiRe
 }
 
 export class GeminiClient {
-  constructor(private readonly apiKey: string) {}
+  constructor(private readonly apiKey: string) { }
 
   async chatStream(
     history: ChatMessage[],

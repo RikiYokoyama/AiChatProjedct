@@ -80,9 +80,8 @@ function RibbonButton({
     <button
       title={title}
       onClick={onClick}
-      className={`flex h-10 w-10 items-center justify-center rounded transition-colors ${
-        active ? 'bg-indigo-500/30 text-indigo-300' : 'text-gray-500 hover:bg-white/10 hover:text-gray-200'
-      }`}
+      className={`flex h-10 w-10 items-center justify-center rounded transition-colors ${active ? 'bg-indigo-500/30 text-indigo-300' : 'text-gray-500 hover:bg-white/10 hover:text-gray-200'
+        }`}
     >
       {icon}
     </button>
@@ -116,11 +115,10 @@ function SortableTab({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`no-drag group flex h-9 max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/10 px-3 text-xs transition-colors ${
-        isActive
-          ? 'bg-[#090d19] text-gray-100'
-          : 'bg-[#0b1020] text-gray-400 hover:bg-[#0d1525] hover:text-gray-200'
-      }`}
+      className={`no-drag group flex h-9 max-w-[180px] shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/10 px-3 text-xs transition-colors ${isActive
+        ? 'bg-[#090d19] text-gray-100'
+        : 'bg-[#0b1020] text-gray-400 hover:bg-[#0d1525] hover:text-gray-200'
+        }`}
     >
       <FileText className="h-3 w-3 shrink-0" />
       <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
@@ -142,8 +140,19 @@ export default function App() {
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
   const [content, setContent] = useState('');
   const [noteContext, setNoteContext] = useState<string | null>(null);
+  const [isAiNoteMode, setIsAiNoteMode] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; note: Note } | null>(null);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameNoteTarget, setRenameNoteTarget] = useState<Note | null>(null);
+  const [renameNewName, setRenameNewName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
+
+  useEffect(() => {
+    const handleCloseMenu = () => setContextMenu(null);
+    window.addEventListener('click', handleCloseMenu);
+    return () => window.removeEventListener('click', handleCloseMenu);
+  }, []);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [ribbonView, setRibbonView] = useState<RibbonView>('notes');
   const [showNewNoteModal, setShowNewNoteModal] = useState(false);
@@ -253,8 +262,17 @@ export default function App() {
 
   async function createNoteFromModal(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const name = cleanFilename(newNoteName);
-    const initial = `# ${name.replace(/\.md$/i, '')}\n\n`;
+    let name = cleanFilename(newNoteName);
+    const baseTitle = name.replace(/\.md$/i, '');
+    let counter = 1;
+    while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+      name = cleanFilename(`${baseTitle} (${counter})`);
+      counter++;
+    }
+    const title = name.replace(/\.md$/i, '');
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
     const result = await window.electronAPI.saveNote({ filename: name, content: initial });
     if (!result.success) {
       alert(result.error ?? 'ノートを作成できませんでした');
@@ -265,7 +283,51 @@ export default function App() {
     await loadNotesList();
     const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
-    setEditMode('edit');
+
+    if (!isAiNoteMode || !config.geminiApiKey) {
+      setEditMode('edit');
+      return;
+    }
+
+    setIsGenerating(true);
+    setEditMode('preview');
+    let accumulatedText = `# ${title}\n作成日時: ${formattedDate}\n\n`;
+    setContent(accumulatedText);
+    setStreamedText('下書き作成中...');
+
+    const client = new GeminiClient(config.geminiApiKey);
+    await client.chatStream(
+      [{ role: 'user', content: `「${title}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。` }],
+      'long-explain',
+      'fast',
+      aiModelMode,
+      null,
+      (chunk) => {
+        accumulatedText += chunk;
+        setContent(accumulatedText);
+        setStreamedText('');
+      },
+      async (fullText) => {
+        setIsGenerating(false);
+        setStreamedText('');
+        const finalContent = `# ${title}\n作成日時: ${formattedDate}\n\n${fullText}`;
+        setContent(finalContent);
+        setNoteContext(finalContent);
+        await window.electronAPI.saveNote({ filename: name, content: finalContent });
+        await loadNotesList();
+      },
+      (error) => {
+        setIsGenerating(false);
+        setStreamedText('');
+        alert(error instanceof Error ? error.message : String(error));
+      }
+    );
+  }
+
+  function renameNote(note: Note) {
+    setRenameNoteTarget(note);
+    setRenameNewName(note.name.replace(/\.md$/i, ''));
+    setShowRenameModal(true);
   }
 
   async function saveCurrentNote() {
@@ -414,254 +476,269 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, streamedText]);
 
+  useEffect(() => {
+    if (!selectedNote || editMode !== 'edit') return;
+    const timer = setTimeout(async () => {
+      await window.electronAPI.saveNote({ filename: selectedNote.name, content });
+      setNoteContext(content);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [content, selectedNote, editMode]);
+
   return (
-    <div className="flex h-screen overflow-hidden bg-[#070a13] text-gray-100">
-      {/* リボンバー */}
-      <nav className="flex w-12 flex-col items-center gap-1 border-r border-white/10 bg-[#060910] py-3">
-        <div className="mb-auto flex flex-col items-center gap-1">
-          <RibbonButton icon={<FileText className="h-4 w-4" />} active={ribbonView === 'notes'} title="ノート" onClick={() => setRibbonView('notes')} />
-          <RibbonButton icon={<Network className="h-4 w-4" />} active={ribbonView === 'graph'} title="グラフ" onClick={() => setRibbonView('graph')} />
+    <div className="flex h-screen flex-col overflow-hidden bg-[#070a13] text-gray-100">
+      {/* ウィンドウタイトルバー */}
+      <div className="drag-area flex h-[35px] shrink-0 items-center justify-between border-b border-white/10 bg-[#070a13] px-4 select-none">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold tracking-wider text-gray-300">📄 AIチャットノート制作</span>
         </div>
-        <div className="flex flex-col items-center gap-1">
-          <button
-            title="Git同期"
-            onClick={syncGit}
-            className="flex h-10 w-10 items-center justify-center rounded text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
-          >
-            {gitStatus === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-          </button>
-          <RibbonButton icon={<Settings className="h-4 w-4" />} active={ribbonView === 'settings'} title="設定" onClick={() => setRibbonView('settings')} />
-        </div>
-      </nav>
+        {/* Windows標準ボタン用のパディング領域 */}
+        <div className="w-[120px] shrink-0" />
+      </div>
 
-      {/* グラフビュー（全画面オーバーレイ） */}
-      {ribbonView === 'graph' && (
-        <div className="absolute inset-0 left-12 z-40">
-          <GraphView
-            notes={notes}
-            onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
-            onClose={() => setRibbonView('notes')}
-          />
-        </div>
-      )}
+      {/* メインコンテンツ領域 */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* リボンバー */}
+        <nav className="flex w-12 flex-col items-center gap-1 border-r border-white/10 bg-[#060910] py-3">
+          <div className="mb-auto flex flex-col items-center gap-1">
+            <RibbonButton icon={<FileText className="h-4 w-4" />} active={ribbonView === 'notes'} title="ノート" onClick={() => setRibbonView('notes')} />
+            <RibbonButton icon={<Network className="h-4 w-4" />} active={ribbonView === 'graph'} title="グラフ" onClick={() => setRibbonView('graph')} />
+          </div>
+          <div className="flex flex-col items-center gap-1">
+            <button
+              title="Git同期"
+              onClick={syncGit}
+              className="flex h-10 w-10 items-center justify-center rounded text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
+            >
+              {gitStatus === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+            </button>
+            <RibbonButton icon={<Settings className="h-4 w-4" />} active={ribbonView === 'settings'} title="設定" onClick={() => setRibbonView('settings')} />
+          </div>
+        </nav>
 
-      {/* ノートリスト */}
-      <aside className="flex w-64 flex-col border-r border-white/10 bg-[#0b1020]/70">
-        <div className="space-y-2 p-3">
-          <button
-            className="flex w-full items-center justify-center gap-2 rounded bg-indigo-500 px-3 py-2 font-semibold hover:bg-indigo-400"
-            onClick={() => setShowNewNoteModal(true)}
-          >
-            <Plus className="h-4 w-4" />
-            新規ノート
-          </button>
-          <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
-            <Search className="h-4 w-4 text-gray-500" />
-            <input
-              className="w-full bg-transparent text-sm outline-none"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="検索"
+        {/* グラフビュー（全画面オーバーレイ） */}
+        {ribbonView === 'graph' && (
+          <div className="absolute inset-0 left-12 z-40">
+            <GraphView
+              notes={notes}
+              onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
+              onClose={() => setRibbonView('notes')}
             />
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-          {isLoading ? (
-            <div className="p-4 text-sm text-gray-400">読み込み中...</div>
-          ) : (
-            filteredNotes.map((note) => (
-              <button
-                key={note.name}
-                className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${
-                  selectedNote?.name === note.name ? 'bg-indigo-500/20 text-indigo-100' : 'text-gray-300'
-                }`}
-                onClick={() => openNote(note)}
-              >
-                <FileText className="h-4 w-4 shrink-0" />
-                <span className="truncate">{note.name}</span>
-              </button>
-            ))
-          )}
-        </div>
-      </aside>
-
-      {/* エディタ領域 */}
-      <section className="flex min-w-0 flex-1 flex-col">
-        {/* タブバー */}
-        <div className="drag-area flex h-9 items-stretch overflow-x-auto border-b border-white/10 bg-[#0b1020]" style={{ scrollbarWidth: 'none' }}>
-          <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-            <SortableContext items={openTabs.map((t) => t.name)} strategy={horizontalListSortingStrategy}>
-              {openTabs.map((tab) => (
-                <SortableTab
-                  key={tab.name}
-                  note={tab}
-                  isActive={selectedNote?.name === tab.name}
-                  onClick={() => openNote(tab)}
-                  onClose={(e) => closeTab(e, tab.name)}
-                />
-              ))}
-            </SortableContext>
-          </DndContext>
-          {/* タブがない or タブより右の空き領域がドラッグ可能 */}
-          <div className="drag-area min-w-[40px] flex-1" />
-        </div>
-
-        {/* エディタツールバー */}
-        <div className="flex h-10 items-center justify-between border-b border-white/10 bg-[#0b1020]/80 px-4">
-          <div className="min-w-0 flex-1">
-            {gitError && <p className="truncate text-xs text-red-300">{gitError}</p>}
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
-              onClick={() => setEditMode(editMode === 'edit' ? 'preview' : 'edit')}
-              disabled={!selectedNote}
-              title="編集/プレビュー"
-            >
-              {editMode === 'edit' ? <Eye className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
-            </button>
-            <button
-              className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
-              onClick={saveCurrentNote}
-              disabled={!selectedNote || isSaving}
-              title="保存"
-            >
-              {saveOk ? <Check className="h-4 w-4 text-emerald-300" /> : <Save className="h-4 w-4" />}
-            </button>
-            <button
-              className="rounded p-2 text-gray-400 hover:bg-red-500/20 hover:text-red-300 disabled:opacity-40"
-              onClick={deleteCurrentNote}
-              disabled={!selectedNote}
-              title="削除"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* エディタ本体 */}
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {selectedNote ? (
-            editMode === 'edit' ? (
-              <textarea
-                className="h-full w-full resize-none bg-[#090d19] p-5 font-mono text-sm leading-7 text-gray-100 outline-none"
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                spellCheck={false}
-              />
-            ) : (
-              <div className="markdown-preview h-full overflow-y-auto p-6">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-              </div>
-            )
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-gray-500">
-              左の一覧からノートを選択してください
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* チャットパネル */}
-      <aside className="flex w-80 flex-col border-l border-white/10 bg-[#0b1020]/70">
-        <div className="border-b border-white/10 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-sm font-semibold text-gray-200">AIチャット</span>
-            <span className="text-xs text-gray-500">
-              {noteContext ? '📄 ノート参照中' : '参照なし'}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-1">
-            <select
-              className="rounded bg-black/30 px-2 py-1.5 text-xs text-gray-300"
-              value={chatMode}
-              onChange={(e) => setChatMode(e.target.value as ChatMode)}
-            >
-              <option value="deep-think">思考整理</option>
-              <option value="markdown-struct">ノート作成</option>
-              <option value="long-explain">長文詳細説明</option>
-            </select>
-            <select
-              className="rounded bg-black/30 px-2 py-1.5 text-xs text-gray-300"
-              value={aiSpeedMode}
-              onChange={(e) => setAiSpeedMode(e.target.value as AiSpeedMode)}
-            >
-              <option value="fast">高速</option>
-              <option value="thinking">思考</option>
-            </select>
-            <select
-              className="rounded bg-black/30 px-2 py-1.5 text-xs text-gray-300"
-              value={aiModelMode}
-              onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
-            >
-              <option value="flash-lite">Lite</option>
-              <option value="flash">Flash</option>
-              <option value="flash-3-5">3.5</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 text-sm">
-          {chatHistory.length === 0 && !streamedText && (
-            <p className="pt-4 text-center text-xs text-gray-600">
-              {noteContext ? '開いているノートの内容を前提に回答します' : 'ノートを開くと内容を前提に回答します'}
-            </p>
-          )}
-          {chatHistory.map((message, index) => (
-            <div
-              key={`${message.role}-${index}`}
-              className={`rounded p-3 ${message.role === 'user' ? 'bg-indigo-500/15' : 'bg-white/5'}`}
-            >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            </div>
-          ))}
-          {streamedText && (
-            <div className="rounded bg-white/5 p-3">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamedText}</ReactMarkdown>
-            </div>
-          )}
-          <div ref={chatEndRef} />
-        </div>
-
-        {autoSaveStatus !== 'idle' && (
-          <div className="border-t border-white/5 px-3 py-1.5 text-xs text-gray-500">
-            {autoSaveStatus === 'saving' ? '保存中...' : '✓ 自動保存しました'}
           </div>
         )}
 
-        <form
-          className="flex items-end gap-2 border-t border-white/10 p-3"
-          onSubmit={(e) => { e.preventDefault(); sendChat(); }}
-        >
-          <textarea
-            ref={chatInputRef}
-            className="min-w-0 flex-1 resize-none rounded bg-black/30 px-3 py-2 text-sm outline-none"
-            rows={1}
-            style={{ maxHeight: '160px', overflowY: 'auto', lineHeight: '1.5' }}
-            value={chatInput}
-            onChange={(e) => {
-              setChatInput(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendChat();
-                // 送信後に高さをリセット
-                e.currentTarget.style.height = 'auto';
-              }
-            }}
-            placeholder="AIに質問（Shift+Enterで改行）"
-          />
-          <button
-            className="rounded bg-indigo-500 p-2 hover:bg-indigo-400 disabled:opacity-40"
-            disabled={isGenerating || !chatInput.trim()}
-          >
-            {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </button>
-        </form>
-      </aside>
+        {/* ノートリスト */}
+        <aside className="flex w-64 shrink-0 flex-col border-r border-white/10 bg-[#0b1020]/70">
+          <div className="space-y-2 p-3">
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-2 font-semibold hover:bg-indigo-500 transition-colors text-sm"
+              onClick={() => { setIsAiNoteMode(true); setShowNewNoteModal(true); }}
+            >
+              <Plus className="h-4 w-4" />
+              AIノート作成
+            </button>
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded bg-gray-800 border border-white/10 px-3 py-2 font-semibold hover:bg-gray-700 transition-colors text-sm"
+              onClick={() => { setIsAiNoteMode(false); setShowNewNoteModal(true); }}
+            >
+              <Plus className="h-4 w-4" />
+              新規ノート作成
+            </button>
+            <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
+              <Search className="h-4 w-4 text-gray-500" />
+              <input
+                className="w-full bg-transparent text-sm outline-none"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="検索"
+              />
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+            {isLoading ? (
+              <div className="p-4 text-sm text-gray-400">読み込み中...</div>
+            ) : (
+              filteredNotes.map((note) => (
+                <button
+                  key={note.name}
+                  className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${selectedNote?.name === note.name ? 'bg-indigo-500/20 text-indigo-100' : 'text-gray-300'
+                    }`}
+                  onClick={() => openNote(note)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      note,
+                    });
+                  }}
+                >
+                  <FileText className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{note.name}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+
+        {/* エディタ領域 */}
+        <section className="flex min-w-0 flex-1 flex-col">
+          {/* タブバー */}
+          <div className="drag-area flex h-9 items-stretch overflow-x-auto border-b border-white/10 bg-[#0b1020]" style={{ scrollbarWidth: 'none' }}>
+            <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+              <SortableContext items={openTabs.map((t) => t.name)} strategy={horizontalListSortingStrategy}>
+                {openTabs.map((tab) => (
+                  <SortableTab
+                    key={tab.name}
+                    note={tab}
+                    isActive={selectedNote?.name === tab.name}
+                    onClick={() => openNote(tab)}
+                    onClose={(e) => closeTab(e, tab.name)}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+            {/* タブがない or タブより右の空き領域がドラッグ可能 */}
+            <div className="drag-area min-w-[40px] flex-1" />
+          </div>
+
+          {/* エディタツールバー */}
+          <div className="flex h-10 items-center justify-between border-b border-white/10 bg-[#0b1020]/80 px-4">
+            <div className="min-w-0 flex-1">
+              {gitError && <p className="truncate text-xs text-red-300">{gitError}</p>}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
+                onClick={() => setEditMode(editMode === 'edit' ? 'preview' : 'edit')}
+                disabled={!selectedNote}
+                title="編集/プレビュー"
+              >
+                {editMode === 'edit' ? <Eye className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
+              </button>
+              <button
+                className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
+                onClick={saveCurrentNote}
+                disabled={!selectedNote || isSaving}
+                title="保存"
+              >
+                {saveOk ? <Check className="h-4 w-4 text-emerald-300" /> : <Save className="h-4 w-4" />}
+              </button>
+              <button
+                className="rounded p-2 text-gray-400 hover:bg-red-500/20 hover:text-red-300 disabled:opacity-40"
+                onClick={deleteCurrentNote}
+                disabled={!selectedNote}
+                title="削除"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* エディタ本体 */}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {selectedNote ? (
+              editMode === 'edit' ? (
+                <textarea
+                  className="h-full w-full resize-none bg-[#090d19] p-5 font-mono text-sm leading-7 text-gray-100 outline-none cursor-text"
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  spellCheck={false}
+                />
+              ) : (
+                <div className="markdown-preview h-full overflow-y-auto p-6">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                </div>
+              )
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-gray-500">
+                左の一覧からノートを選択してください
+              </div>
+            )}
+          </div>
+
+          {/* 下部チャットエリア */}
+          {selectedNote && (
+            <div className="border-t border-white/10 bg-[#0b1020]/90 p-4">
+              {/* ストリーミング回答表示 */}
+              {streamedText && (
+                <div className="mb-3 rounded bg-white/5 p-3 border border-white/10 text-sm max-h-[120px] overflow-y-auto">
+                  <div className="text-xs text-indigo-400 font-semibold mb-1">AI回答中...</div>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamedText}</ReactMarkdown>
+                </div>
+              )}
+
+              {/* 設定ドロップダウン（入力欄の上） */}
+              <div className="mb-3 flex items-center gap-2">
+                <select
+                  className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
+                  value={chatMode}
+                  onChange={(e) => setChatMode(e.target.value as ChatMode)}
+                >
+                  <option value="deep-think">思考整理</option>
+                  <option value="markdown-struct">ノート作成</option>
+                  <option value="long-explain">長文詳細説明</option>
+                </select>
+                <select
+                  className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
+                  value={aiSpeedMode}
+                  onChange={(e) => setAiSpeedMode(e.target.value as AiSpeedMode)}
+                >
+                  <option value="fast">高速</option>
+                  <option value="thinking">思考</option>
+                </select>
+                <select
+                  className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
+                  value={aiModelMode}
+                  onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
+                >
+                  <option value="flash-lite">Lite</option>
+                  <option value="flash">Flash</option>
+                  <option value="flash-3-5">3.5</option>
+                </select>
+                {autoSaveStatus !== 'idle' && (
+                  <span className="ml-auto flex items-center text-xs text-gray-500">
+                    {autoSaveStatus === 'saving' ? '保存中...' : '✓ 自動保存しました'}
+                  </span>
+                )}
+              </div>
+
+              {/* チャット入力フォーム */}
+              <form
+                className="flex items-end gap-2"
+                onSubmit={(e) => { e.preventDefault(); sendChat(); }}
+              >
+                <textarea
+                  ref={chatInputRef}
+                  className="min-w-0 flex-1 resize-none rounded bg-black/30 border border-white/10 px-3 py-2 text-sm text-gray-100 outline-none focus:border-indigo-500/50 transition-colors"
+                  rows={1}
+                  style={{ maxHeight: '120px', overflowY: 'auto', lineHeight: '1.5' }}
+                  value={chatInput}
+                  onChange={(e) => {
+                    setChatInput(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendChat();
+                      e.currentTarget.style.height = 'auto';
+                    }
+                  }}
+                  placeholder="AIに質問（Shift+Enterで改行）"
+                />
+                <button
+                  className="rounded bg-indigo-500 p-2.5 text-white hover:bg-indigo-400 disabled:opacity-40 flex items-center justify-center shrink-0"
+                  disabled={isGenerating || !chatInput.trim()}
+                >
+                  {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </button>
+              </form>
+            </div>
+          )}
+        </section>
+      </div>
 
       {/* 設定パネル（オーバーレイ） */}
       {ribbonView === 'settings' && (
@@ -721,7 +798,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <form className="w-full max-w-md rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl" onSubmit={createNoteFromModal}>
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">新規ノート</h2>
+              <h2 className="text-lg font-semibold">{isAiNoteMode ? 'AIノート作成' : '新規ノート作成'}</h2>
               <button type="button" className="rounded p-2 hover:bg-white/10" onClick={() => setShowNewNoteModal(false)}>
                 <X className="h-4 w-4" />
               </button>
@@ -735,7 +812,157 @@ export default function App() {
                 autoFocus
               />
             </label>
+
+            {isAiNoteMode && (
+              <div className="mb-5 block text-sm">
+                <span className="mb-2 block text-gray-300">AI設定</span>
+                <div className="flex gap-2">
+                  <select
+                    className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
+                    value={chatMode}
+                    onChange={(e) => setChatMode(e.target.value as ChatMode)}
+                  >
+                    <option value="deep-think">思考整理</option>
+                    <option value="markdown-struct">ノート作成</option>
+                    <option value="long-explain">長文詳細説明</option>
+                  </select>
+                  <select
+                    className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
+                    value={aiSpeedMode}
+                    onChange={(e) => setAiSpeedMode(e.target.value as AiSpeedMode)}
+                  >
+                    <option value="fast">高速</option>
+                    <option value="thinking">思考</option>
+                  </select>
+                  <select
+                    className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
+                    value={aiModelMode}
+                    onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
+                  >
+                    <option value="flash-lite">Lite</option>
+                    <option value="flash">Flash</option>
+                    <option value="flash-3-5">3.5</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
             <button className="w-full rounded bg-indigo-500 px-4 py-2 font-semibold hover:bg-indigo-400">作成</button>
+          </form>
+        </div>
+      )}
+
+      {/* 右クリックコンテキストメニュー */}
+      {contextMenu && (
+        <div
+          className="fixed z-[100] w-36 rounded border border-white/10 bg-[#111625] py-1 shadow-2xl editor-context-menu"
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="flex w-full items-center px-4 py-2 text-left text-xs text-gray-200 hover:bg-indigo-500/20 hover:text-indigo-300 transition-colors"
+            onClick={() => {
+              setContextMenu(null);
+              renameNote(contextMenu.note);
+            }}
+          >
+            名前変更
+          </button>
+          <button
+            className="flex w-full items-center px-4 py-2 text-left text-xs text-red-400 hover:bg-red-500/10 transition-colors"
+            onClick={async () => {
+              setContextMenu(null);
+              if (!window.confirm(`${contextMenu.note.name} を削除しますか？`)) return;
+              const result = await window.electronAPI.deleteNote(contextMenu.note.name);
+              if (!result.success) {
+                alert(result.error ?? '削除に失敗しました');
+                return;
+              }
+              const tabName = contextMenu.note.name;
+              setOpenTabs((prev) => {
+                const idx = prev.findIndex((t) => t.name === tabName);
+                const next = prev.filter((t) => t.name !== tabName);
+                const fallback = next[Math.max(0, idx - 1)] ?? next[0] ?? null;
+                if (fallback) {
+                  openNote(fallback);
+                } else {
+                  setSelectedNote(null);
+                  setContent('');
+                  setNoteContext(null);
+                  setChatHistory([]);
+                  setStreamedText('');
+                }
+                return next;
+              });
+              await loadNotesList();
+            }}
+          >
+            削除
+          </button>
+        </div>
+      )}
+
+      {/* 名前変更モーダル */}
+      {showRenameModal && renameNoteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowRenameModal(false)}>
+          <form
+            className="w-full max-w-md rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const oldName = renameNoteTarget.name;
+              const cleanedTitle = renameNewName.trim();
+              if (!cleanedTitle) {
+                alert('ノート名を入力してください');
+                return;
+              }
+              const newName = cleanFilename(cleanedTitle);
+              if (newName === oldName) {
+                setShowRenameModal(false);
+                return;
+              }
+
+              const result = await window.electronAPI.renameNote({ oldFilename: oldName, newFilename: newName });
+              if (!result.success) {
+                alert(result.error ?? '名前変更に失敗しました');
+                return;
+              }
+
+              await loadNotesList();
+
+              setOpenTabs((prev) =>
+                prev.map((t) => {
+                  if (t.name === oldName) {
+                    return { ...t, name: newName, path: result.path ?? t.path };
+                  }
+                  return t;
+                })
+              );
+
+              if (selectedNote?.name === oldName) {
+                setSelectedNote((prev) => (prev ? { ...prev, name: newName, path: result.path ?? prev.path } : null));
+              }
+
+              setShowRenameModal(false);
+              setRenameNoteTarget(null);
+            }}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">ノート名の変更</h2>
+              <button type="button" className="rounded p-2 hover:bg-white/10" onClick={() => setShowRenameModal(false)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <label className="mb-5 block text-sm">
+              <span className="mb-1 block text-gray-300">新しい名前</span>
+              <input
+                className="w-full rounded bg-black/30 px-3 py-2 outline-none"
+                value={renameNewName}
+                onChange={(e) => setRenameNewName(e.target.value)}
+                autoFocus
+              />
+            </label>
+            <button className="w-full rounded bg-indigo-500 px-4 py-2 font-semibold hover:bg-indigo-400">変更</button>
           </form>
         </div>
       )}

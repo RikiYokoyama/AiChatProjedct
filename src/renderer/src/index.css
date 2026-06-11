@@ -40,6 +40,11 @@
 }
 
 /* Markdownプレビューのスタイル調整 */
+.markdown-preview {
+  user-select: text;
+  cursor: auto;
+}
+
 .markdown-preview h1 {
   @apply text-2xl font-bold mt-6 mb-4 text-white border-b border-gray-800 pb-2;
 }
@@ -60,176 +65,117 @@
   @apply mb-4 pl-6 list-disc text-gray-300;
 }
 
-.markdown-
-.markdown-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  line-height: 1;
+.markdown-preview li {
+  @apply mb-1;
+}
+
+.markdown-preview code {
+  @apply bg-gray-800/60 text-emerald-300 text-sm px-1.5 py-0.5 rounded;
+}
+
+.markdown-preview pre {
+  @apply bg-gray-900/80 rounded-lg p-4 mb-4 overflow-x-auto;
+}
+
+.markdown-preview pre code {
+  @apply bg-transparent p-0;
+}
+
+.markdown-preview blockquote {
+  @apply border-l-4 border-indigo-500/50 pl-4 my-4 text-gray-400 italic;
+}
+
+.markdown-preview table {
+  @apply w-full border-collapse mb-4;
+}
+
+.markdown-preview th, .markdown-preview td {
+  @apply border border-gray-800 px-3 py-2 text-sm;
+}
+
+.markdown-preview th {
+  @apply bg-gray-800/40 font-semibold text-gray-200;
+}
+
+.markdown-preview a {
+  @apply text-indigo-400 hover:text-indigo-300 underline;
+}
+
+/* Wikiリンクスタイル */
+.obsidian-wiki-link {
+  color: #818cf8;
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px dashed rgba(129, 140, 248, 0.4);
+  transition: all 0.15s ease;
+}
+
+.obsidian-wiki-link:hover {
+  color: #a5b4fc;
+  border-bottom-color: rgba(165, 180, 252, 0.6);
+}
+
+.obsidian-wiki-link.is-ghost {
+  color: #6b7280;
+  border-bottom-style: dotted;
+}
+
+.obsidian-external-link {
+  color: #60a5fa;
+  text-decoration: underline;
+}
+
+/* プロパティ表示 */
+.property-section {
+  border-bottom: 1px solid rgba(75, 85, 99, 0.3);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.property-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.property-key {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #9ca3af;
+}
+
+.property-icon {
+  font-size: 0.7rem;
+}
+
+.property-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.property-tag-badge {
   display: inline-flex;
   align-items: center;
+  gap: 0.25rem;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.property-tag-remove {
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 0.85rem;
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -302,10 +248,77 @@
   color: #10b981;
 }
 
+.callout-success, .callout-done {
+  border-left-color: #10b981;
+  background: rgba(16, 185, 129, 0.05);
+}
+.callout-success .callout-title, .callout-done .callout-title {
+  color: #10b981;
+}
+
 .callout-warning, .callout-caution {
   border-left-color: #ef4444;
   background: rgba(239, 68, 68, 0.05);
 }
 .callout-warning .callout-title, .callout-caution .callout-title {
   color: #ef4444;
+}
+
+.callout-summary, .callout-abstract {
+  border-left-color: #06b6d4;
+  background: rgba(6, 182, 212, 0.05);
+}
+.callout-summary .callout-title, .callout-abstract .callout-title {
+  color: #06b6d4;
+}
+
+.callout-quote {
+  border-left-color: #9ca3af;
+  background: rgba(156, 163, 175, 0.05);
+}
+.callout-quote .callout-title {
+  color: #9ca3af;
+}
+
+.callout-tip {
+  border-left-color: #06b6d4;
+  background: rgba(6, 182, 212, 0.05);
+}
+.callout-tip .callout-title {
+  color: #06b6d4;
+}
+
+/* インディゴの光輪 (glow) */
+.glow-indigo {
+  box-shadow: 0 0 30px rgba(99, 102, 241, 0.08);
+}
+
+/* ドラッグ領域 */
+.drag-area {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* エディタ右クリックメニュー */
+.editor-context-menu {
+  animation: fadeInScale 0.12s ease-out;
+}
+
+/* Callout 予測変換ドロップダウン */
+.callout-suggestions {
+  animation: fadeInScale 0.12s ease-out;
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
