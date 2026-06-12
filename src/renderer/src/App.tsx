@@ -1281,20 +1281,32 @@ export default function App() {
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
-                      a: ({ href, children, ...props }) => {
+                      a: (props) => {
+                        const { href, children } = props;
                         if (href && href.startsWith('wiki://')) {
                           const noteName = decodeURIComponent(href.replace('wiki://', ''));
                           return (
                             <span
                               className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
-                              onClick={() => handleWikiLinkClick(noteName)}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleWikiLinkClick(noteName);
+                              }}
                             >
                               {children}
                             </span>
                           );
                         }
                         return (
-                          <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props}>
+                          <a
+                            href={href}
+                            className="text-blue-400 hover:underline"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            {...props}
+                          >
                             {children}
                           </a>
                         );
@@ -1322,20 +1334,32 @@ export default function App() {
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
-                      a: ({ href, children, ...props }) => {
+                      a: (props) => {
+                        const { href, children } = props;
                         if (href && href.startsWith('wiki://')) {
                           const noteName = decodeURIComponent(href.replace('wiki://', ''));
                           return (
                             <span
                               className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
-                              onClick={() => handleWikiLinkClick(noteName)}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleWikiLinkClick(noteName);
+                              }}
                             >
                               {children}
                             </span>
                           );
                         }
                         return (
-                          <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props}>
+                          <a
+                            href={href}
+                            className="text-blue-400 hover:underline"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            {...props}
+                          >
                             {children}
                           </a>
                         );
