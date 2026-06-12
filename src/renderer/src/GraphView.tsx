@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
-import { X, Eye, Video, Settings, RotateCcw, Plus, Trash, Play } from 'lucide-react';
+import { X, Eye, Video, Settings, RotateCcw, Plus, Trash, Play, Pause } from 'lucide-react';
 import * as THREE from 'three';
 
 interface Note {
@@ -43,12 +43,16 @@ const defaultSettings = {
   textFadeThreshold: 20,
   nodeSize: 1.0,
   linkThickness: 1.0,
+  nodeColor: '#a5b4fc', // デフォルトノード色
+  linkColor: '#334155', // デフォルトリンク色
 
   // 力の強さ
   centerForce: 0.5,
   repulsion: 1.0,
   linkForce: 1.0,
   linkDistance: 15,
+  repulsionDistance: 15.0, // ノード反発距離
+  linkRepulsionDistance: 5.0, // 接続ノード反発距離
 };
 
 function noteId(note: Note) {
@@ -97,7 +101,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   const sigmaRef = useRef<Sigma | null>(null);
   const lineMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const coneMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
-  const [viewMode, setViewMode] = useState<'2D' | '3D'>('3D');
+  const [viewMode, setViewMode] = useState<'2D' | '3D'>('2D');
   const [showSettings, setShowSettings] = useState(false);
 
   // ローカルグラフ用の深さ（デフォルト2）
@@ -121,9 +125,21 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   const [newGroupQuery, setNewGroupQuery] = useState('');
   const [newGroupColor, setNewGroupColor] = useState('#818cf8');
 
-  // タイムラプス
-  const [timelapseActive, setTimelapseActive] = useState(false);
-  const [timelapseLimit, setTimelapseLimit] = useState<number>(0); // 表示上限インデックス
+  // ノードの一時停止
+  const [isPaused, setIsPaused] = useState(false);
+  const isPausedRef = useRef(isPaused);
+  const worker2DInstanceRef = useRef<any>(null);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+    if (worker2DInstanceRef.current) {
+      if (isPaused) {
+        worker2DInstanceRef.current.stop();
+      } else {
+        worker2DInstanceRef.current.start();
+      }
+    }
+  }, [isPaused]);
 
   // 設定および手動固定座標の読み込み効果
   useEffect(() => {
@@ -268,7 +284,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     // 1. ノード追加（ノートノード）
     activeNotes.forEach((note) => {
       const id = noteId(note);
-      let color = '#a5b4fc'; // デフォルトノード色
+      let color = settings.nodeColor; // デフォルトノード色
 
       // グループルールの適用
       for (const rule of groupRules) {
@@ -341,7 +357,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       const source = noteId(note);
       note.wikiLinks?.forEach((link) => {
         const targetNote = byId.get(link.toLowerCase());
-        const target = targetNote ? noteId(targetNote) : link;
+        const target = (targetNote ? noteId(targetNote) : link).replace(/\.md$/i, '');
 
         // 存在するファイルのみを表示かつターゲットが存在しない場合はスキップ
         if (settings.existingOnly && !existMap.has(target.toLowerCase())) {
@@ -359,7 +375,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         }
 
         if (source !== target && !g.hasEdge(source, target)) {
-          g.addEdge(source, target, { color: '#334155', size: settings.linkThickness });
+          g.addEdge(source, target, { color: settings.linkColor, size: settings.linkThickness });
         }
       });
     });
@@ -376,52 +392,15 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     return g;
   }, [notes, settings, groupRules, isLocal, centerNoteName, localDepth]);
 
-  // タイムラプスアニメーション制御
-  useEffect(() => {
-    if (!timelapseActive) return;
-
-    // 更新日時（作成日時とみなす）で全ノードをソート
-    const sortedNodes = graph.nodes()
-      .map((n) => ({ id: n, time: new Date(graph.getNodeAttribute(n, 'updatedAt') || 0).getTime() }))
-      .sort((a, b) => a.time - b.time);
-
-    setTimelapseLimit(0);
-
-    const interval = setInterval(() => {
-      setTimelapseLimit((prev) => {
-        if (prev >= sortedNodes.length) {
-          clearInterval(interval);
-          setTimelapseActive(false);
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, 250);
-
-    return () => clearInterval(interval);
-  }, [timelapseActive, graph]);
-
-  // フィルタリング後のアニメーション制限を適用した動的表示ノード・エッジ
+  // フィルタリング後の動的表示ノード・エッジ
   const activeElements = useMemo(() => {
     const nodes = graph.nodes();
     const edges = graph.edges().map((edge) => {
       const ext = graph.extremities(edge);
       return { id: edge, source: ext[0], target: ext[1] };
     });
-
-    if (timelapseActive || timelapseLimit > 0) {
-      const sorted = nodes
-        .map((n) => ({ id: n, time: new Date(graph.getNodeAttribute(n, 'updatedAt') || 0).getTime() }))
-        .sort((a, b) => a.time - b.time);
-
-      const visibleSet = new Set(sorted.slice(0, timelapseLimit).map((x) => x.id));
-      const filteredNodes = nodes.filter((n) => visibleSet.has(n));
-      const filteredEdges = edges.filter((e) => visibleSet.has(e.source) && visibleSet.has(e.target));
-      return { nodes: filteredNodes, edges: filteredEdges };
-    }
-
     return { nodes, edges };
-  }, [graph, timelapseActive, timelapseLimit]);
+  }, [graph]);
 
   // 2D Sigma.js rendering update
   const settings2DRef = useRef(settings2D);
@@ -457,12 +436,12 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     const sigma = new Sigma(subGraph, containerRef2D.current, {
       renderEdgeLabels: false,
-      defaultEdgeColor: '#334155',
-      defaultNodeColor: '#a5b4fc',
+      defaultEdgeColor: settings2DRef.current.linkColor,
+      defaultNodeColor: settings2DRef.current.nodeColor,
       labelColor: { color: '#dbeafe' },
       allowInvalidContainer: true,
       labelRenderedSizeThreshold: settings2DRef.current.showLabels 
-        ? (settings2DRef.current.textFadeThreshold || 15) 
+        ? (settings2DRef.current.textFadeThreshold === 1 ? 0 : (settings2DRef.current.textFadeThreshold || 15)) 
         : 999,
       defaultDrawNodeHover: () => {},
       edgeReducer: (_, data) => {
@@ -500,16 +479,21 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         }
       });
 
-      // 物理演算開始
-      worker.start();
+      worker2DInstanceRef.current = worker;
+      let timer: any = null;
 
-      // 一定時間（3〜5秒）経過後に自動停止してCPU負荷を下げる
-      const autoStopDelay = nodesArray.length > 500 ? 3000 : 5000;
-      const timer = setTimeout(() => {
-        if (worker && typeof worker.stop === 'function') {
-          worker.stop();
-        }
-      }, autoStopDelay);
+      // 物理演算開始
+      if (!isPausedRef.current) {
+        worker.start();
+
+        // 一定時間（3〜5秒）経過後に自動停止してCPU負荷を下げる
+        const autoStopDelay = nodesArray.length > 500 ? 3000 : 5000;
+        timer = setTimeout(() => {
+          if (worker && typeof worker.stop === 'function') {
+            worker.stop();
+          }
+        }, autoStopDelay);
+      }
 
       // 流動（ゆらぎ）モーション用の毎フレームのアニメーション制御
       const animate2D = () => {
@@ -521,7 +505,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             // 固定されたノードはドラッグ座標を厳密に維持
             subGraph.setNodeAttribute(node, 'x', fixedNodes2D.current[node].x);
             subGraph.setNodeAttribute(node, 'y', fixedNodes2D.current[node].y);
-          } else {
+          } else if (!isPausedRef.current) {
             // 固定されていないノードは滑らかに浮遊ゆらぎ
             let hash = 0;
             for (let idx = 0; idx < node.length; idx++) {
@@ -551,7 +535,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       animate2D();
 
       return () => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         if (worker) {
           worker.kill();
         }
@@ -559,6 +543,22 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     });
 
     let draggedNode2D: string | null = null;
+    let hoveredNode2D: string | null = null;
+
+    sigma.on('enterNode', ({ node }) => {
+      hoveredNode2D = node;
+      if (tooltipRef.current) {
+        tooltipRef.current.style.display = 'block';
+        tooltipRef.current.textContent = node;
+      }
+    });
+
+    sigma.on('leaveNode', () => {
+      hoveredNode2D = null;
+      if (tooltipRef.current) {
+        tooltipRef.current.style.display = 'none';
+      }
+    });
 
     sigma.on('downNode', (e) => {
       draggedNode2D = e.node;
@@ -590,6 +590,13 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         if (tooltipRef.current) {
           tooltipRef.current.style.display = 'block';
           tooltipRef.current.textContent = draggedNode2D;
+          tooltipRef.current.style.left = `${x + 12}px`;
+          tooltipRef.current.style.top = `${y - 12}px`;
+        }
+      } else if (hoveredNode2D) {
+        if (tooltipRef.current) {
+          tooltipRef.current.style.display = 'block';
+          tooltipRef.current.textContent = hoveredNode2D;
           tooltipRef.current.style.left = `${x + 12}px`;
           tooltipRef.current.style.top = `${y - 12}px`;
         }
@@ -625,17 +632,18 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       window.removeEventListener('mouseup', handleMouseUp2D);
       sigma.kill();
       sigmaRef.current = null;
+      worker2DInstanceRef.current = null;
       if (containerRef2D.current) {
         containerRef2D.current.innerHTML = '';
       }
     };
-  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, onSelectNote]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, onSelectNote, settings2D.nodeColor, settings2D.linkColor]);
 
   // リンク表示やファイル名表示の切り替え時にSigmaを再描画
   useEffect(() => {
     if (sigmaRef.current) {
       const sizeThreshold = settings2D.showLabels 
-        ? (settings2D.textFadeThreshold || 15) 
+        ? (settings2D.textFadeThreshold === 1 ? 0 : (settings2D.textFadeThreshold || 15)) 
         : 999;
       sigmaRef.current.setSetting('labelRenderedSizeThreshold', sizeThreshold);
       sigmaRef.current.refresh();
@@ -680,7 +688,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       } else {
         const phi = Math.acos(-1 + (2 * i) / Math.max(targetNodes.length, 1));
         const theta = Math.sqrt(targetNodes.length * Math.PI) * phi;
-        const radius = settings3D.linkDistance;
+        const radius = settings3DRef.current.linkDistance;
         const pos = new THREE.Vector3(
           radius * Math.cos(theta) * Math.sin(phi),
           radius * Math.sin(theta) * Math.sin(phi),
@@ -701,7 +709,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       const pos = nodePositions.get(node)!;
       const baseScale = graph.getNodeAttribute(node, 'size') / 8.0;
       tempObject.position.copy(pos);
-      tempObject.scale.setScalar(baseScale * settings3D.nodeSize);
+      tempObject.scale.setScalar(baseScale * settings3DRef.current.nodeSize);
       tempObject.updateMatrix();
       instancedMesh.setMatrixAt(i, tempObject.matrix);
 
@@ -718,10 +726,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     // エッジ (LineSegments)
     const lineMaterial = new THREE.LineBasicMaterial({
-      color: 0x475569,
+      color: new THREE.Color(settings3D.linkColor),
       transparent: true,
       opacity: settings3D.showLinks ? 0.6 : 0.0,
-      linewidth: settings3D.linkThickness,
+      linewidth: settings3DRef.current.linkThickness,
     });
     lineMaterialRef.current = lineMaterial;
     const lineVertices: number[] = [];
@@ -783,6 +791,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     let draggedInstanceId3D: number | null = null;
     let dragPlane = new THREE.Plane();
     let dragIntersection = new THREE.Vector3();
+    let hasDragged3D = false;
 
     const handleMouseDown = (e: MouseEvent) => {
       const rect = container.getBoundingClientRect();
@@ -801,6 +810,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           planeNormal.negate();
           dragPlane.setFromNormalAndCoplanarPoint(planeNormal, nodePos);
           isDragging = false;
+          hasDragged3D = false;
         }
       } else {
         isDragging = e.button === 0;
@@ -820,6 +830,9 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         if (raycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
           const nodeName = targetNodes[draggedInstanceId3D];
           const pos = nodePositions.get(nodeName)!;
+          if (pos.distanceTo(dragIntersection) > 0.01) {
+            hasDragged3D = true;
+          }
           pos.copy(dragIntersection);
           stepCount3D = 0; // スリープ解除
 
@@ -857,8 +870,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       if (draggedInstanceId3D !== null) {
         const nodeName = targetNodes[draggedInstanceId3D];
         const pos = nodePositions.get(nodeName)!;
-        fixedNodes3D.current[nodeName] = { x: pos.x, y: pos.y, z: pos.z };
-        saveAllCoordinates();
+        if (hasDragged3D) {
+          fixedNodes3D.current[nodeName] = { x: pos.x, y: pos.y, z: pos.z };
+          saveAllCoordinates();
+        }
         draggedInstanceId3D = null;
       }
       isDragging = false;
@@ -897,6 +912,16 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     container.addEventListener('dblclick', handleDoubleClick);
     container.addEventListener('contextmenu', preventDefault);
 
+    // 各ノードの隣接リストを事前に構築 (O(N + E) で1回だけ処理して高速化)
+    const adjacencyMap = new Map<string, Set<string>>();
+    targetNodes.forEach((node) => {
+      adjacencyMap.set(node, new Set<string>());
+    });
+    targetEdges.forEach(({ source, target }) => {
+      adjacencyMap.get(source)?.add(target);
+      adjacencyMap.get(target)?.add(source);
+    });
+
     // アニメーションフレーム (ここで物理計算を毎フレーム行う)
     let animationFrameId: number;
     let stepCount3D = 0;
@@ -907,6 +932,8 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     let lastLinkForce = settings3DRef.current.linkForce;
     let lastLinkDistance = settings3DRef.current.linkDistance;
     let lastCenterForce = settings3DRef.current.centerForce;
+    let lastRepulsionDistance = settings3DRef.current.repulsionDistance;
+    let lastLinkRepulsionDistance = settings3DRef.current.linkRepulsionDistance;
 
     const animate = () => {
       // 設定スライダーの値が変更されたら、自動的に物理演算をウェイクアップ（再稼働）
@@ -914,12 +941,16 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         settings3DRef.current.repulsion !== lastRepulsion ||
         settings3DRef.current.linkForce !== lastLinkForce ||
         settings3DRef.current.linkDistance !== lastLinkDistance ||
-        settings3DRef.current.centerForce !== lastCenterForce
+        settings3DRef.current.centerForce !== lastCenterForce ||
+        settings3DRef.current.repulsionDistance !== lastRepulsionDistance ||
+        settings3DRef.current.linkRepulsionDistance !== lastLinkRepulsionDistance
       ) {
         lastRepulsion = settings3DRef.current.repulsion;
         lastLinkForce = settings3DRef.current.linkForce;
         lastLinkDistance = settings3DRef.current.linkDistance;
         lastCenterForce = settings3DRef.current.centerForce;
+        lastRepulsionDistance = settings3DRef.current.repulsionDistance;
+        lastLinkRepulsionDistance = settings3DRef.current.linkRepulsionDistance;
         stepCount3D = 0; // スリープ解除
       }
 
@@ -930,7 +961,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
       const isCooling = stepCount3D >= maxSteps3D;
 
-      if (!isCooling) {
+      if (!isCooling && !isPausedRef.current) {
         stepCount3D++;
         
         // --- 以前の普通で正しい3D物理演算モデルの復元 ---
@@ -953,7 +984,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
               
               const dir = new THREE.Vector3().subVectors(posA, posB);
               const distSq = dir.lengthSq() || 0.01;
-              const minDist = settings3DRef.current.linkDistance * 0.8;
+              const isLinked = adjacencyMap.get(nodeA)?.has(nodeB) || false;
+              const minDist = isLinked
+                ? (settings3DRef.current.linkRepulsionDistance ?? 5.0)
+                : (settings3DRef.current.repulsionDistance || 15.0);
 
               // 近いもの同士だけを押し出す元のシンプルな反発力
               if (distSq < minDist * minDist) {
@@ -997,7 +1031,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       // 4. 流動（ゆらぎ）モーションの追加 (手動ドラッグ固定されていないノード)
       const now = Date.now();
       targetNodes.forEach((node) => {
-        if (fixedNodes3D.current[node]) return;
+        if (fixedNodes3D.current[node] || isPausedRef.current) return;
 
         let hash = 0;
         for (let idx = 0; idx < node.length; idx++) {
@@ -1113,12 +1147,17 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           frustum.setFromProjectionMatrix(projScreenMatrix);
 
           const visibleNodes: { name: string; pos: THREE.Vector3; dist: number }[] = [];
+          const textFade = settings3DRef.current.textFadeThreshold || 20;
+          const maxDist = textFade === 1 ? Infinity : 800 / textFade;
+
           targetNodes.forEach((nodeName) => {
             const worldPos = nodePositions.get(nodeName);
             if (worldPos) {
               if (frustum.containsPoint(worldPos)) {
                 const dist = camera.position.distanceTo(worldPos);
-                visibleNodes.push({ name: nodeName, pos: worldPos, dist });
+                if (dist <= maxDist) {
+                  visibleNodes.push({ name: nodeName, pos: worldPos, dist });
+                }
               }
             }
           });
@@ -1193,19 +1232,21 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       lineMaterialRef.current = null;
       coneMaterialRef.current = null;
     };
-  }, [graph, activeElements, viewMode, isSettingsLoaded, settings3D.linkDistance, settings3D.nodeSize, settings3D.linkThickness, groupRules, notes, onSelectNote]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, groupRules, notes, onSelectNote, settings3D.textFadeThreshold, settings3D.nodeColor, settings3D.linkColor]);
 
-  // 3D リンク表示・矢印表示の切り替え時にマテリアルの不透明度を動的に更新
+  // 3D リンク表示・矢印表示・カラー・太さの切り替え時にマテリアルの不透明度や色・太さを動的に更新
   useEffect(() => {
     if (lineMaterialRef.current) {
       lineMaterialRef.current.opacity = settings3D.showLinks ? 0.6 : 0.0;
+      lineMaterialRef.current.color.set(settings3D.linkColor);
+      lineMaterialRef.current.linewidth = settings3D.linkThickness;
       lineMaterialRef.current.needsUpdate = true;
     }
     if (coneMaterialRef.current) {
       coneMaterialRef.current.opacity = (settings3D.showLinks && settings3D.showArrows) ? 1.0 : 0.0;
       coneMaterialRef.current.needsUpdate = true;
     }
-  }, [settings3D.showLinks, settings3D.showArrows]);
+  }, [settings3D.showLinks, settings3D.showArrows, settings3D.linkColor, settings3D.linkThickness]);
 
   return (
     <div className="h-screen bg-[#070a13] text-gray-100 flex relative select-none">
@@ -1395,12 +1436,36 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                 <input
                   type="range"
                   min="0.5"
-                  max="5"
+                  max="10"
                   step="0.1"
                   value={settings.linkThickness}
                   onChange={(e) => setSettings({ ...settings, linkThickness: Number(e.target.value) })}
                   className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                 />
+              </div>
+              <div className="flex gap-4">
+                <div className="flex-1 space-y-1">
+                  <div className="flex justify-between text-gray-400">
+                    <span>ノードの色</span>
+                  </div>
+                  <input
+                    type="color"
+                    value={settings.nodeColor || '#a5b4fc'}
+                    onChange={(e) => setSettings({ ...settings, nodeColor: e.target.value })}
+                    className="w-full h-8 border border-white/10 rounded cursor-pointer bg-transparent"
+                  />
+                </div>
+                <div className="flex-1 space-y-1">
+                  <div className="flex justify-between text-gray-400">
+                    <span>リンクの色</span>
+                  </div>
+                  <input
+                    type="color"
+                    value={settings.linkColor || '#334155'}
+                    onChange={(e) => setSettings({ ...settings, linkColor: e.target.value })}
+                    className="w-full h-8 border border-white/10 rounded cursor-pointer bg-transparent"
+                  />
+                </div>
               </div>
               <div className="space-y-1">
                 <div className="flex justify-between text-gray-400">
@@ -1409,7 +1474,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                 </div>
                 <input
                   type="range"
-                  min="5"
+                  min="1"
                   max="50"
                   step="1"
                   value={settings.textFadeThreshold}
@@ -1484,6 +1549,40 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                   className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                 />
               </div>
+              {viewMode === '3D' && (
+                <>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-gray-400">
+                      <span>ノード反発距離（接近限界）</span>
+                      <span>{settings.repulsionDistance || 15}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="2"
+                      max="30"
+                      step="1"
+                      value={settings.repulsionDistance || 15}
+                      onChange={(e) => setSettings({ ...settings, repulsionDistance: Number(e.target.value) })}
+                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-gray-400">
+                      <span>接続ノード反発距離（リンク先接近限界）</span>
+                      <span>{settings.linkRepulsionDistance ?? 5}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="1"
+                      max="20"
+                      step="1"
+                      value={settings.linkRepulsionDistance ?? 5}
+                      onChange={(e) => setSettings({ ...settings, linkRepulsionDistance: Number(e.target.value) })}
+                      className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                  </div>
+                </>
+              )}
               <button
                 onClick={handleResetCoordinates}
                 className="w-full flex items-center justify-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded py-2 mt-2 font-medium transition-colors border border-white/5"
@@ -1494,16 +1593,26 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             </div>
           </div>
 
-          {/* タイムラプスアニメーション */}
+          {/* ノードの動き制御 */}
           <div className="pt-2 border-t border-white/10 space-y-2">
-            <span className="font-medium text-gray-300 block">タイムラプスアニメーション</span>
+            <span className="font-medium text-gray-300 block">ノードの動き制御</span>
             <button
-              onClick={() => setTimelapseActive(true)}
-              disabled={timelapseActive}
-              className="w-full flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded py-2 font-semibold transition-colors disabled:opacity-40"
+              onClick={() => setIsPaused(!isPaused)}
+              className={`w-full flex items-center justify-center gap-1.5 text-white rounded py-2 font-semibold transition-colors ${
+                isPaused ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-red-600 hover:bg-red-500'
+              }`}
             >
-              <Play className="w-3.5 h-3.5" />
-              アニメーション開始
+              {isPaused ? (
+                <>
+                  <Play className="w-3.5 h-3.5" />
+                  ノードの動きを再開
+                </>
+              ) : (
+                <>
+                  <Pause className="w-3.5 h-3.5" />
+                  ノードの動きを一時停止
+                </>
+              )}
             </button>
           </div>
         </div>

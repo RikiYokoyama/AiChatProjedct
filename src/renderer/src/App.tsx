@@ -588,7 +588,7 @@ export default function App() {
                   }}
                 >
                   <FileText className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{note.name}</span>
+                  <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
                 </button>
               ))
             )}
