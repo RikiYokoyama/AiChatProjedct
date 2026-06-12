@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -150,6 +150,7 @@ export default function App() {
   const [noteContext, setNoteContext] = useState<string | null>(null);
   const [isAiNoteMode, setIsAiNoteMode] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; note: Note } | null>(null);
+  const [previewContextMenu, setPreviewContextMenu] = useState<{ x: number; y: number; selectedText: string } | null>(null);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [renameNoteTarget, setRenameNoteTarget] = useState<Note | null>(null);
   const [renameNewName, setRenameNewName] = useState('');
@@ -157,7 +158,10 @@ export default function App() {
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
 
   useEffect(() => {
-    const handleCloseMenu = () => setContextMenu(null);
+    const handleCloseMenu = () => {
+      setContextMenu(null);
+      setPreviewContextMenu(null);
+    };
     window.addEventListener('click', handleCloseMenu);
     return () => window.removeEventListener('click', handleCloseMenu);
   }, []);
@@ -188,6 +192,71 @@ export default function App() {
   const [expandedLinks, setExpandedLinks] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  const wrapSelectionWithWikiLink = useCallback(() => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+
+    const selectedText = text.substring(start, end);
+    const beforeText = text.substring(0, start);
+    const afterText = text.substring(end);
+
+    const newSelectedText = `[[${selectedText}]]`;
+    const newContent = beforeText + newSelectedText + afterText;
+
+    setContent(newContent);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + 2, start + 2 + selectedText.length);
+    }, 0);
+  }, [content]);
+
+  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl + L (または Cmd + L / Meta + L)
+    const isCtrlL = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l';
+    // [ キー単体（テキストが選択されている時のみ動作）
+    const textarea = e.currentTarget;
+    const isBracket = e.key === '[';
+    const hasSelection = textarea.selectionStart !== textarea.selectionEnd;
+
+    if (isCtrlL || (isBracket && hasSelection)) {
+      e.preventDefault();
+      wrapSelectionWithWikiLink();
+    }
+  };
+
+  const handlePreviewContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    const selection = window.getSelection();
+    if (!selection) return;
+    const selectedText = selection.toString().trim();
+    if (selectedText) {
+      e.preventDefault();
+      setPreviewContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        selectedText,
+      });
+    } else {
+      setPreviewContextMenu(null);
+    }
+  };
+
+  const handleWrapPreviewSelection = () => {
+    if (!previewContextMenu) return;
+    const { selectedText } = previewContextMenu;
+    const index = content.indexOf(selectedText);
+    if (index !== -1) {
+      const newContent = content.substring(0, index) + `[[${selectedText}]]` + content.substring(index + selectedText.length);
+      setContent(newContent);
+    }
+    setPreviewContextMenu(null);
+  };
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -1026,6 +1095,16 @@ export default function App() {
               {gitError && <p className="truncate text-xs text-red-300">{gitError}</p>}
             </div>
             <div className="flex items-center gap-1">
+              {editMode === 'edit' && (
+                <button
+                  className="rounded px-2 py-1 text-xs font-bold font-mono text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
+                  onClick={wrapSelectionWithWikiLink}
+                  disabled={!selectedNote}
+                  title="選択テキストをWikiリンク化 (Ctrl+L / [)"
+                >
+                  [[ ]]
+                </button>
+              )}
               <button
                 className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
                 onClick={() => {
@@ -1132,13 +1211,18 @@ export default function App() {
             {selectedNote ? (
               editMode === 'edit' ? (
                 <textarea
+                  ref={editorRef}
                   className="h-full w-full resize-none bg-[#090d19] p-5 font-mono text-sm leading-7 text-gray-100 outline-none cursor-text"
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
+                  onKeyDown={handleEditorKeyDown}
                   spellCheck={false}
                 />
               ) : (
-                <div className="markdown-preview h-full overflow-y-auto p-6">
+                <div
+                  className="markdown-preview h-full overflow-y-auto p-6"
+                  onContextMenu={handlePreviewContextMenu}
+                >
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
                 </div>
               )
@@ -1488,6 +1572,22 @@ export default function App() {
             }}
           >
             削除
+          </button>
+        </div>
+      )}
+
+      {/* プレビュー用右クリックコンテキストメニュー（吹き出し） */}
+      {previewContextMenu && (
+        <div
+          className="fixed z-[100] rounded border border-indigo-500/30 bg-[#111625] px-2 py-1 shadow-2xl transition-all"
+          style={{ top: `${previewContextMenu.y - 40}px`, left: `${previewContextMenu.x}px`, transform: 'translateX(-50%)' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="flex items-center rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 transition-colors whitespace-nowrap"
+            onClick={handleWrapPreviewSelection}
+          >
+            Wikiリンク化する
           </button>
         </div>
       )}
