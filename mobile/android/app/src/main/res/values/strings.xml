@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AI Markdown Chat Note</string>
+    <string name="title_activity_main">AI Markdown Chat Note</string>
+    <string name="package_name">com.local.aimarkdownchatnote</string>
+    <string name="custom_url_scheme">com.local.aimarkdownchatnote</string>
+</resources>
