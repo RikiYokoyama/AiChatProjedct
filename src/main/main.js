@@ -160,6 +160,42 @@ app.on('window-all-closed', () => {
 ipcMain.handle('load-config', () => loadConfig());
 ipcMain.handle('save-config', (event, config) => saveConfig(config));
 
+const coordinatesFilePath = path.join(appUserDataPath, 'node_coordinates.json');
+
+function loadCoordinates() {
+  try {
+    if (fs.existsSync(coordinatesFilePath)) {
+      const data = fs.readFileSync(coordinatesFilePath, 'utf8');
+      const parsed = JSON.parse(data);
+      return {
+        '2d': parsed['2d'] || {},
+        '3d': parsed['3d'] || {}
+      };
+    }
+  } catch (err) {
+    console.error('Failed to load coordinates:', err);
+  }
+  return { '2d': {}, '3d': {} };
+}
+
+function saveCoordinates(coords) {
+  try {
+    const current = loadCoordinates();
+    const newCoords = {
+      '2d': coords['2d'] !== undefined ? coords['2d'] : (current['2d'] || {}),
+      '3d': coords['3d'] !== undefined ? coords['3d'] : (current['3d'] || {})
+    };
+    fs.writeFileSync(coordinatesFilePath, JSON.stringify(newCoords, null, 2), 'utf8');
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to save coordinates:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+ipcMain.handle('load-coordinates', () => loadCoordinates());
+ipcMain.handle('save-coordinates', (event, coords) => saveCoordinates(coords));
+
 // ウィンドウドラッグ移動用
 ipcMain.on('window-moving', (event, { deltaX, deltaY }) => {
   if (mainWindow) {
@@ -167,6 +203,38 @@ ipcMain.on('window-moving', (event, { deltaX, deltaY }) => {
     mainWindow.setPosition(x + deltaX, y + deltaY);
   }
 });
+
+const graphSettingsFilePath = path.join(appUserDataPath, 'graph_settings.json');
+
+function loadGraphSettings() {
+  try {
+    if (fs.existsSync(graphSettingsFilePath)) {
+      const data = fs.readFileSync(graphSettingsFilePath, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Failed to load graph settings:', err);
+  }
+  return { '2d': {}, '3d': {} };
+}
+
+function saveGraphSettings(settings) {
+  try {
+    const current = loadGraphSettings();
+    const newSettings = {
+      '2d': settings['2d'] !== undefined ? settings['2d'] : (current['2d'] || {}),
+      '3d': settings['3d'] !== undefined ? settings['3d'] : (current['3d'] || {})
+    };
+    fs.writeFileSync(graphSettingsFilePath, JSON.stringify(newSettings, null, 2), 'utf8');
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to save graph settings:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+ipcMain.handle('load-graph-settings', () => loadGraphSettings());
+ipcMain.handle('save-graph-settings', (event, settings) => saveGraphSettings(settings));
 
 function resolveNotePath(notesPath, filename) {
   const safeFilename = filename.endsWith('.md') ? filename : `${filename}.md`;

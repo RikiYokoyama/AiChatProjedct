@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   loadConfig: () => ipcRenderer.invoke('load-config'),
   saveConfig: (config) => ipcRenderer.invoke('save-config', config),
+  loadCoordinates: () => ipcRenderer.invoke('load-coordinates'),
+  saveCoordinates: (coords) => ipcRenderer.invoke('save-coordinates', coords),
   listNotes: () => ipcRenderer.invoke('list-notes'),
   readNote: (filename) => ipcRenderer.invoke('read-note', filename),
   saveNote: (data) => ipcRenderer.invoke('save-note', data),
@@ -13,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMoving: (delta) => ipcRenderer.send('window-moving', delta),
   fetchUrlText: (url) => ipcRenderer.invoke('fetch-url-text', url),
   appendToNote: (data) => ipcRenderer.invoke('append-to-note', data),
+  loadGraphSettings: () => ipcRenderer.invoke('load-graph-settings'),
+  saveGraphSettings: (settings) => ipcRenderer.invoke('save-graph-settings', settings),
   
   // Gitステータス変更の通知リスナー
   onGitStatusChanged: (callback) => {

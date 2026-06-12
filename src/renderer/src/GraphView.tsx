@@ -38,6 +38,8 @@ const defaultSettings = {
 
   // 表示
   showArrows: false,
+  showLinks: false, // リンク線をデフォルトで非表示にする
+  showLabels: true, // ファイル名（ラベル）表示
   textFadeThreshold: 20,
   nodeSize: 1.0,
   linkThickness: 1.0,
@@ -93,14 +95,27 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   const sigmaRef = useRef<Sigma | null>(null);
+  const lineMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const coneMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
   const [viewMode, setViewMode] = useState<'2D' | '3D'>('3D');
   const [showSettings, setShowSettings] = useState(false);
 
   // ローカルグラフ用の深さ（デフォルト2）
   const [localDepth, setLocalDepth] = useState<number>(2);
 
-  // 設定状態
-  const [settings, setSettings] = useState(defaultSettings);
+  // 設定状態 (2Dと3Dで分離)
+  const [settings2D, setSettings2D] = useState(defaultSettings);
+  const [settings3D, setSettings3D] = useState(defaultSettings);
+  const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
+
+  // 現在のアクティブな設定を動的に取得・更新するヘルパー
+  const settings = viewMode === '2D' ? settings2D : settings3D;
+  const setSettings = viewMode === '2D' ? setSettings2D : setSettings3D;
+
+  // 手動でドラッグして固定されたノードの座標管理用Ref
+  const fixedNodes2D = useRef<Record<string, { x: number; y: number }>>({});
+  const fixedNodes3D = useRef<Record<string, { x: number; y: number; z?: number }>>({});
+
   // グループ設定
   const [groupRules, setGroupRules] = useState<GroupRule[]>([]);
   const [newGroupQuery, setNewGroupQuery] = useState('');
@@ -110,8 +125,48 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   const [timelapseActive, setTimelapseActive] = useState(false);
   const [timelapseLimit, setTimelapseLimit] = useState<number>(0); // 表示上限インデックス
 
+  // 設定および手動固定座標の読み込み効果
+  useEffect(() => {
+    // まず設定を読み込む
+    window.electronAPI.loadGraphSettings().then((saved) => {
+      if (saved) {
+        if (saved['2d']) setSettings2D((prev) => ({ ...prev, ...saved['2d'] }));
+        if (saved['3d']) setSettings3D((prev) => ({ ...prev, ...saved['3d'] }));
+      }
+      setIsSettingsLoaded(true);
+    });
+
+    // 固定された座標を読み込む
+    window.electronAPI.loadCoordinates().then((coords) => {
+      if (coords) {
+        if (coords['2d']) fixedNodes2D.current = coords['2d'];
+        if (coords['3d']) fixedNodes3D.current = coords['3d'];
+      }
+    });
+  }, []);
+
+  // 設定保存効果 (2D)
+  useEffect(() => {
+    if (!isSettingsLoaded) return;
+    window.electronAPI.saveGraphSettings({ '2d': settings2D });
+  }, [settings2D, isSettingsLoaded]);
+
+  // 設定保存効果 (3D)
+  useEffect(() => {
+    if (!isSettingsLoaded) return;
+    window.electronAPI.saveGraphSettings({ '3d': settings3D });
+  }, [settings3D, isSettingsLoaded]);
+
+  const saveAllCoordinates = () => {
+    window.electronAPI.saveCoordinates({
+      '2d': fixedNodes2D.current,
+      '3d': fixedNodes3D.current
+    });
+  };
+
   const resetToDefaults = () => {
-    setSettings(defaultSettings);
+    setSettings2D(defaultSettings);
+    setSettings3D(defaultSettings);
     setGroupRules([]);
   };
 
@@ -123,6 +178,18 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
   const removeGroupRule = (index: number) => {
     setGroupRules(groupRules.filter((_, i) => i !== index));
+  };
+
+  // 初期配置リセット（手動固定座標のクリア & 力学の再スタート用）
+  const handleResetCoordinates = () => {
+    if (viewMode === '2D') {
+      fixedNodes2D.current = {};
+    } else {
+      fixedNodes3D.current = {};
+    }
+    saveAllCoordinates();
+    // settings をトリガーして useEffect を再起動
+    setSettings({ ...settings });
   };
 
   // グラフ構築ロジック（フィルタ・グループ・タグ展開などを適用）
@@ -357,8 +424,13 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   }, [graph, timelapseActive, timelapseLimit]);
 
   // 2D Sigma.js rendering update
+  const settings2DRef = useRef(settings2D);
   useEffect(() => {
-    if (viewMode !== '2D' || !containerRef2D.current) return;
+    settings2DRef.current = settings2D;
+  }, [settings2D]);
+
+  useEffect(() => {
+    if (viewMode !== '2D' || !containerRef2D.current || !isSettingsLoaded) return;
 
     // 現在のアクティブな状態のサブグラフをビルド
     const subGraph = new Graph();
@@ -375,11 +447,16 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       return { source: ext[0], target: ext[1] };
     });
 
-    // 簡易的な初期2D配置
+    // 初期2D配置 (手動固定された座標がある場合は適用、なければ円形配置)
     subGraph.nodes().forEach((node, index) => {
-      const angle = (Math.PI * 2 * index) / Math.max(subGraph.order, 1);
-      subGraph.setNodeAttribute(node, 'x', Math.cos(angle) * 100);
-      subGraph.setNodeAttribute(node, 'y', Math.sin(angle) * 100);
+      if (fixedNodes2D.current[node]) {
+        subGraph.setNodeAttribute(node, 'x', fixedNodes2D.current[node].x);
+        subGraph.setNodeAttribute(node, 'y', fixedNodes2D.current[node].y);
+      } else {
+        const angle = (Math.PI * 2 * index) / Math.max(subGraph.order, 1);
+        subGraph.setNodeAttribute(node, 'x', Math.cos(angle) * 100);
+        subGraph.setNodeAttribute(node, 'y', Math.sin(angle) * 100);
+      }
     });
 
     const sigma = new Sigma(subGraph, containerRef2D.current, {
@@ -388,29 +465,42 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       defaultNodeColor: '#a5b4fc',
       labelColor: { color: '#dbeafe' },
       allowInvalidContainer: true,
+      labelRenderedSizeThreshold: settings2DRef.current.showLabels 
+        ? (settings2DRef.current.textFadeThreshold || 15) 
+        : 999,
+      defaultDrawNodeHover: () => {},
+      edgeReducer: (_, data) => {
+        const res = { ...data };
+        if (!settings2DRef.current.showLinks) {
+          res.color = '#00000000';
+          res.size = 0;
+        }
+        return res;
+      },
     });
     sigmaRef.current = sigma;
 
-    sigma.on('clickNode', ({ node }) => {
+    // ダブルクリックでファイルを開く
+    sigma.on('doubleClickNode', ({ node }) => {
       const found = notes.find((note) => noteId(note) === node);
       if (found) onSelectNote(found);
     });
 
-    // 2D用リアルタイムフレーム力学計算 (力強さを3Dと同等に抑制し、かつ不要な描画更新を間引いて点滅を防止)
+    // 2D用リアルタイムフレーム力学計算
     let animationFrameId2D: number;
     let frameCounter = 0;
 
     const animate2D = () => {
-      // 3Dと同等の穏やかな係数に減衰
-      const repulsionStrength = settings.repulsion * 0.05;
-      const attractionStrength = settings.linkForce * 0.01;
-      const centerStrength = settings.centerForce * 0.005;
-
       let totalPosDiff = 0;
+      const centerStrength = settings2DRef.current.centerForce * 0.01;
+      const repulsionStrength = settings2DRef.current.repulsion * 5.0;
+      const attractionStrength = settings2DRef.current.linkForce * 0.02;
 
-      // 1. 反発力
+      // 1. ノード間の反発力
       for (let i = 0; i < nodesArray.length; i++) {
         const nodeA = nodesArray[i];
+        if (fixedNodes2D.current[nodeA]) continue; // 手動固定ノードは動かさない
+
         const ax = subGraph.getNodeAttribute(nodeA, 'x') as number;
         const ay = subGraph.getNodeAttribute(nodeA, 'y') as number;
 
@@ -419,22 +509,22 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           const bx = subGraph.getNodeAttribute(nodeB, 'x') as number;
           const by = subGraph.getNodeAttribute(nodeB, 'y') as number;
 
-          let dx = ax - bx;
-          let dy = ay - by;
-          let distSq = dx * dx + dy * dy || 0.01;
-          const minDist = settings.linkDistance * 1.5;
+          const dx = bx - ax;
+          const dy = by - ay;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+          const minDist = settings2DRef.current.linkDistance * 2.0;
 
-          if (distSq < minDist * minDist) {
-            const dist = Math.sqrt(distSq);
-            // 係数を大幅に減衰
+          if (dist < minDist) {
             const force = (repulsionStrength * (minDist - dist)) / (dist * 10);
             const fx = dx * force;
             const fy = dy * force;
 
-            subGraph.setNodeAttribute(nodeA, 'x', ax + fx);
-            subGraph.setNodeAttribute(nodeA, 'y', ay + fy);
-            subGraph.setNodeAttribute(nodeB, 'x', bx - fx);
-            subGraph.setNodeAttribute(nodeB, 'y', by - fy);
+            subGraph.setNodeAttribute(nodeA, 'x', ax - fx);
+            subGraph.setNodeAttribute(nodeA, 'y', ay - fy);
+            if (!fixedNodes2D.current[nodeB]) {
+              subGraph.setNodeAttribute(nodeB, 'x', bx + fx);
+              subGraph.setNodeAttribute(nodeB, 'y', by + fy);
+            }
             totalPosDiff += Math.abs(fx) + Math.abs(fy);
           }
         }
@@ -450,23 +540,29 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         let dx = bx - ax;
         let dy = by - ay;
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const targetDist = settings.linkDistance * 1.2;
+        const targetDist = settings2DRef.current.linkDistance * 1.2;
 
         if (dist > targetDist) {
           const force = attractionStrength * (dist - targetDist) * 0.2;
           const fx = (dx / dist) * force;
           const fy = (dy / dist) * force;
 
-          subGraph.setNodeAttribute(source, 'x', ax + fx);
-          subGraph.setNodeAttribute(source, 'y', ay + fy);
-          subGraph.setNodeAttribute(target, 'x', bx - fx);
-          subGraph.setNodeAttribute(target, 'y', by - fy);
+          if (!fixedNodes2D.current[source]) {
+            subGraph.setNodeAttribute(source, 'x', ax + fx);
+            subGraph.setNodeAttribute(source, 'y', ay + fy);
+          }
+          if (!fixedNodes2D.current[target]) {
+            subGraph.setNodeAttribute(target, 'x', bx - fx);
+            subGraph.setNodeAttribute(target, 'y', by - fy);
+          }
           totalPosDiff += Math.abs(fx) + Math.abs(fy);
         }
       });
 
       // 3. 中心引力
       nodesArray.forEach((node) => {
+        if (fixedNodes2D.current[node]) return;
+
         const x = subGraph.getNodeAttribute(node, 'x') as number;
         const y = subGraph.getNodeAttribute(node, 'y') as number;
         const dx = x * centerStrength;
@@ -476,10 +572,31 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         totalPosDiff += Math.abs(dx) + Math.abs(dy);
       });
 
-      // 変化量が非常に小さいか、毎フレーム再レンダリングするのを避けて点滅を防ぐ
-      // 画面更新は2フレームに1回に間引き（レンダラ負荷とWebGLバッファ転送の抑制）かつ、動きがある時のみリフレッシュ
+      // 4. 流動（ゆらぎ）モーションの追加 (手動ドラッグ固定されていないノード)
+      const now = Date.now();
+      nodesArray.forEach((node) => {
+        if (fixedNodes2D.current[node]) return;
+
+        // ノード名ハッシュによる各位相オフセットの付与
+        let hash = 0;
+        for (let idx = 0; idx < node.length; idx++) {
+          hash = (hash << 5) - hash + node.charCodeAt(idx);
+        }
+        const offset = Math.abs(hash) % 1000;
+
+        const x = subGraph.getNodeAttribute(node, 'x') as number;
+        const y = subGraph.getNodeAttribute(node, 'y') as number;
+
+        // 呼吸するようにゆったり動く波
+        const jitterX = Math.sin((now * 0.0006) + offset) * 0.06;
+        const jitterY = Math.cos((now * 0.0006) + offset) * 0.06;
+
+        subGraph.setNodeAttribute(node, 'x', x + jitterX);
+        subGraph.setNodeAttribute(node, 'y', y + jitterY);
+      });
+
       frameCounter++;
-      if (frameCounter % 2 === 0 && totalPosDiff > 0.01) {
+      if (frameCounter % 2 === 0) {
         sigma.refresh();
       }
 
@@ -488,16 +605,90 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     animate2D();
 
+    let draggedNode2D: string | null = null;
+
+    sigma.on('downNode', (e) => {
+      draggedNode2D = e.node;
+      sigma.getCamera().disable();
+    });
+
+    sigma.getMouseCaptor().on('mousemovebody', (e) => {
+      if (!containerRef2D.current) return;
+      const rect = containerRef2D.current.getBoundingClientRect();
+      
+      const clientX = 'clientX' in e.original ? e.original.clientX : (e.original as TouchEvent).touches[0].clientX;
+      const clientY = 'clientY' in e.original ? e.original.clientY : (e.original as TouchEvent).touches[0].clientY;
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+
+      if (draggedNode2D) {
+        e.preventSigmaDefault();
+        e.original.preventDefault();
+        e.original.stopPropagation();
+
+        const graphCoords = sigma.viewportToGraph({ x, y });
+        subGraph.setNodeAttribute(draggedNode2D, 'x', graphCoords.x);
+        subGraph.setNodeAttribute(draggedNode2D, 'y', graphCoords.y);
+        sigma.refresh();
+
+        if (tooltipRef.current) {
+          tooltipRef.current.style.display = 'block';
+          tooltipRef.current.textContent = draggedNode2D;
+          tooltipRef.current.style.left = `${x + 12}px`;
+          tooltipRef.current.style.top = `${y - 12}px`;
+        }
+      }
+    });
+
+    const handleMouseUp2D = () => {
+      if (draggedNode2D) {
+        // ドラッグしたノードの最終座標を fixedNodes2D に保存して永続化
+        const finalX = subGraph.getNodeAttribute(draggedNode2D, 'x') as number;
+        const finalY = subGraph.getNodeAttribute(draggedNode2D, 'y') as number;
+        fixedNodes2D.current[draggedNode2D] = { x: finalX, y: finalY };
+        saveAllCoordinates();
+
+        draggedNode2D = null;
+        sigma.getCamera().enable();
+      }
+      if (tooltipRef.current) {
+        tooltipRef.current.style.display = 'none';
+      }
+    };
+
+    sigma.getMouseCaptor().on('mouseup', handleMouseUp2D);
+    window.addEventListener('mouseup', handleMouseUp2D);
+
     return () => {
       cancelAnimationFrame(animationFrameId2D);
+      window.removeEventListener('mouseup', handleMouseUp2D);
       sigma.kill();
       sigmaRef.current = null;
+      if (containerRef2D.current) {
+        containerRef2D.current.innerHTML = '';
+      }
     };
-  }, [graph, activeElements, viewMode, settings, notes, onSelectNote]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, onSelectNote]);
+
+  // リンク表示やファイル名表示の切り替え時にSigmaを再描画（再シミュレーションなし）
+  useEffect(() => {
+    if (sigmaRef.current) {
+      const sizeThreshold = settings2D.showLabels 
+        ? (settings2D.textFadeThreshold || 15) 
+        : 999;
+      sigmaRef.current.setSetting('labelRenderedSizeThreshold', sizeThreshold);
+      sigmaRef.current.refresh();
+    }
+  }, [settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold]);
 
   // 3D Three.js rendering update
+  const settings3DRef = useRef(settings3D);
   useEffect(() => {
-    if (viewMode !== '3D' || !containerRef3D.current) return;
+    settings3DRef.current = settings3D;
+  }, [settings3D]);
+
+  useEffect(() => {
+    if (viewMode !== '3D' || !containerRef3D.current || !isSettingsLoaded) return;
 
     const container = containerRef3D.current;
     const width = container.clientWidth || window.innerWidth;
@@ -520,21 +711,25 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     const { nodes: targetNodes, edges: targetEdges } = activeElements;
     const nodePositions = new Map<string, THREE.Vector3>();
 
-    // 初期球状配置
+    // 3D初期配置（手動固定座標の復帰、なければフィボナッチ球状配置）
     targetNodes.forEach((node, i) => {
-      const phi = Math.acos(-1 + (2 * i) / Math.max(targetNodes.length, 1));
-      const theta = Math.sqrt(targetNodes.length * Math.PI) * phi;
-      const radius = settings.linkDistance;
-      const pos = new THREE.Vector3(
-        radius * Math.cos(theta) * Math.sin(phi),
-        radius * Math.sin(theta) * Math.sin(phi),
-        radius * Math.cos(phi)
-      );
-      nodePositions.set(node, pos);
+      if (fixedNodes3D.current[node]) {
+        const saved = fixedNodes3D.current[node];
+        nodePositions.set(node, new THREE.Vector3(saved.x, saved.y, saved.z || 0));
+      } else {
+        const phi = Math.acos(-1 + (2 * i) / Math.max(targetNodes.length, 1));
+        const theta = Math.sqrt(targetNodes.length * Math.PI) * phi;
+        const radius = settings3D.linkDistance;
+        const pos = new THREE.Vector3(
+          radius * Math.cos(theta) * Math.sin(phi),
+          radius * Math.sin(theta) * Math.sin(phi),
+          radius * Math.cos(phi)
+        );
+        nodePositions.set(node, pos);
+      }
     });
 
     // InstancedMesh を使ったノード描画
-    // D3 / Three.js 上でグループ分けに対応した色を管理するため、色のバッファ属性を設定
     const sphereGeometry = new THREE.SphereGeometry(0.6, 16, 16);
     const nodeMaterial = new THREE.MeshBasicMaterial();
     const instancedMesh = new THREE.InstancedMesh(sphereGeometry, nodeMaterial, targetNodes.length);
@@ -545,11 +740,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       const pos = nodePositions.get(node)!;
       const baseScale = graph.getNodeAttribute(node, 'size') / 8.0;
       tempObject.position.copy(pos);
-      tempObject.scale.setScalar(baseScale * settings.nodeSize);
+      tempObject.scale.setScalar(baseScale * settings3D.nodeSize);
       tempObject.updateMatrix();
       instancedMesh.setMatrixAt(i, tempObject.matrix);
 
-      // 色の適用
       const colorStr = graph.getNodeAttribute(node, 'color') || '#a5b4fc';
       tempColor.set(colorStr);
       instancedMesh.setColorAt(i, tempColor);
@@ -565,9 +759,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     const lineMaterial = new THREE.LineBasicMaterial({
       color: 0x475569,
       transparent: true,
-      opacity: 0.6,
-      linewidth: settings.linkThickness,
+      opacity: settings3D.showLinks ? 0.6 : 0.0,
+      linewidth: settings3D.linkThickness,
     });
+    lineMaterialRef.current = lineMaterial;
     const lineVertices: number[] = [];
     targetEdges.forEach(({ source, target }) => {
       const posA = nodePositions.get(source);
@@ -585,24 +780,28 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     // 矢印表示 (コーン)
     const arrows: THREE.Mesh[] = [];
-    if (settings.showArrows) {
-      const coneGeometry = new THREE.ConeGeometry(0.3, 0.8, 8);
-      const coneMaterial = new THREE.MeshBasicMaterial({ color: 0x64748b });
-      targetEdges.forEach(({ source, target }) => {
-        const posA = nodePositions.get(source);
-        const posB = nodePositions.get(target);
-        if (posA && posB) {
-          const arrowMesh = new THREE.Mesh(coneGeometry, coneMaterial);
-          const midPoint = new THREE.Vector3().lerpVectors(posA, posB, 0.7);
-          arrowMesh.position.copy(midPoint);
-          const dir = new THREE.Vector3().subVectors(posB, posA).normalize();
-          const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-          arrowMesh.setRotationFromQuaternion(quaternion);
-          scene.add(arrowMesh);
-          arrows.push(arrowMesh);
-        }
-      });
-    }
+    const coneGeometry = new THREE.ConeGeometry(0.3, 0.8, 8);
+    const coneMaterial = new THREE.MeshBasicMaterial({
+      color: 0x64748b,
+      transparent: true,
+      opacity: (settings3D.showLinks && settings3D.showArrows) ? 1.0 : 0.0,
+    });
+    coneMaterialRef.current = coneMaterial;
+
+    targetEdges.forEach(({ source, target }) => {
+      const posA = nodePositions.get(source);
+      const posB = nodePositions.get(target);
+      if (posA && posB) {
+        const arrowMesh = new THREE.Mesh(coneGeometry, coneMaterial);
+        const midPoint = new THREE.Vector3().lerpVectors(posA, posB, 0.7);
+        arrowMesh.position.copy(midPoint);
+        const dir = new THREE.Vector3().subVectors(posB, posA).normalize();
+        const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        arrowMesh.setRotationFromQuaternion(quaternion);
+        scene.add(arrowMesh);
+        arrows.push(arrowMesh);
+      }
+    });
 
     // カメラドラッグ & ズーム
     let isDragging = false;
@@ -619,8 +818,38 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     const mouse = new THREE.Vector2();
     let hoveredIndex: number | null = null;
 
+    // 3Dドラッグ移動管理用変数
+    let draggedInstanceId3D: number | null = null;
+    let dragPlane = new THREE.Plane();
+    let dragIntersection = new THREE.Vector3();
+
     const handleMouseDown = (e: MouseEvent) => {
-      isDragging = e.button === 0;
+      // レイキャストでノードをドラッグ判定する
+      const rect = container.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObject(instancedMesh);
+
+      if (e.button === 0 && intersects.length > 0) {
+        // ノードドラッグ開始
+        const idx = intersects[0].instanceId;
+        if (idx !== undefined) {
+          draggedInstanceId3D = idx;
+          const nodePos = nodePositions.get(targetNodes[idx])!;
+          
+          // カメラに対面するドラッグ平面を設定
+          const planeNormal = new THREE.Vector3();
+          camera.getWorldDirection(planeNormal);
+          planeNormal.negate();
+          dragPlane.setFromNormalAndCoplanarPoint(planeNormal, nodePos);
+          
+          // カメラ操作を停止
+          isDragging = false;
+        }
+      } else {
+        isDragging = e.button === 0;
+      }
       isRightDragging = e.button === 2;
       dragStart.x = e.clientX;
       dragStart.y = e.clientY;
@@ -631,7 +860,27 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       mouse.x = ((e.clientX - rect.left) / width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
 
-      if (isDragging) {
+      if (draggedInstanceId3D !== null) {
+        // ノードドラッグ中
+        raycaster.setFromCamera(mouse, camera);
+        if (raycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
+          const nodeName = targetNodes[draggedInstanceId3D];
+          const pos = nodePositions.get(nodeName)!;
+          pos.copy(dragIntersection);
+          stepCount3D = 0; // スリープ解除して再描画
+
+          if (tooltipRef.current) {
+            tooltipRef.current.style.display = 'block';
+            tooltipRef.current.textContent = nodeName;
+            const screenPos = pos.clone().project(camera);
+            const x = (screenPos.x * 0.5 + 0.5) * width;
+            const y = (-(screenPos.y * 0.5) + 0.5) * height;
+            tooltipRef.current.style.left = `${x + 12}px`;
+            tooltipRef.current.style.top = `${y - 12}px`;
+          }
+        }
+      } else if (isDragging) {
+        // カメラ回転
         const dx = e.clientX - dragStart.x;
         const dy = e.clientY - dragStart.y;
         targetRotation.y -= dx * 0.005;
@@ -640,30 +889,40 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         dragStart.x = e.clientX;
         dragStart.y = e.clientY;
       } else if (isRightDragging) {
+        // カメラ平行移動
         const dx = e.clientX - dragStart.x;
         const dy = e.clientY - dragStart.y;
-        const rightVec = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-        const upVec = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-        const panFactor = distance * 0.0015;
-        targetPan.addScaledVector(rightVec, -dx * panFactor);
-        targetPan.addScaledVector(upVec, dy * panFactor);
+        const scale = distance * 0.001;
+        const panDirX = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).multiplyScalar(-dx * scale);
+        const panDirY = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).multiplyScalar(dy * scale);
+        targetPan.add(panDirX).add(panDirY);
         dragStart.x = e.clientX;
         dragStart.y = e.clientY;
       }
     };
 
     const handleMouseUp = () => {
+      if (draggedInstanceId3D !== null) {
+        const nodeName = targetNodes[draggedInstanceId3D];
+        const pos = nodePositions.get(nodeName)!;
+        fixedNodes3D.current[nodeName] = { x: pos.x, y: pos.y, z: pos.z };
+        saveAllCoordinates();
+        draggedInstanceId3D = null;
+      }
       isDragging = false;
       isRightDragging = false;
+      if (tooltipRef.current) {
+        tooltipRef.current.style.display = 'none';
+      }
     };
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       targetDistance += e.deltaY * 0.03;
-      targetDistance = Math.max(10, Math.min(200, targetDistance));
+      targetDistance = Math.max(1, Math.min(200, targetDistance));
     };
 
-    const handleClick = (e: MouseEvent) => {
+    const handleDoubleClick = (e: MouseEvent) => {
       if (e.button !== 0) return;
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObject(instancedMesh);
@@ -683,53 +942,131 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     container.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     container.addEventListener('wheel', handleWheel, { passive: false });
-    container.addEventListener('click', handleClick);
+    container.addEventListener('dblclick', handleDoubleClick);
     container.addEventListener('contextmenu', preventDefault);
 
     // アニメーションフレーム (ここで物理計算を毎フレーム行う)
     let animationFrameId: number;
-    const animate = () => {
-      // 1. ノード間の反発力 (Repulsion)
-      const repulsionStrength = settings.repulsion * 0.05;
-      const attractionStrength = settings.linkForce * 0.01;
-      const centerStrength = settings.centerForce * 0.005;
+    let stepCount3D = 0;
+    const maxSteps3D = 100; // ウォームアップ済みのため、初期微調整は100ステップで十分
 
-      for (let i = 0; i < targetNodes.length; i++) {
-        const nodeA = targetNodes[i];
-        const posA = nodePositions.get(nodeA)!;
-        for (let j = i + 1; j < targetNodes.length; j++) {
-          const nodeB = targetNodes[j];
-          const posB = nodePositions.get(nodeB)!;
-          const dir = new THREE.Vector3().subVectors(posA, posB);
-          const distSq = dir.lengthSq() || 0.01;
-          const minDist = settings.linkDistance * 0.8;
-          if (distSq < minDist * minDist) {
-            dir.normalize().multiplyScalar(repulsionStrength * (minDist - Math.sqrt(distSq)));
-            posA.add(dir);
-            posB.sub(dir);
-          }
-        }
+    // 外部の settings3D 変更を検知して物理演算を再稼働（ウェイクアップ）させるための監視
+    let lastRepulsion = settings3DRef.current.repulsion;
+    let lastLinkForce = settings3DRef.current.linkForce;
+    let lastLinkDistance = settings3DRef.current.linkDistance;
+    let lastCenterForce = settings3DRef.current.centerForce;
+
+    const animate = () => {
+      // 設定スライダーの値が変更されたら、自動的に物理演算をウェイクアップ（再稼働）
+      if (
+        settings3DRef.current.repulsion !== lastRepulsion ||
+        settings3DRef.current.linkForce !== lastLinkForce ||
+        settings3DRef.current.linkDistance !== lastLinkDistance ||
+        settings3DRef.current.centerForce !== lastCenterForce
+      ) {
+        lastRepulsion = settings3DRef.current.repulsion;
+        lastLinkForce = settings3DRef.current.linkForce;
+        lastLinkDistance = settings3DRef.current.linkDistance;
+        lastCenterForce = settings3DRef.current.centerForce;
+        stepCount3D = 0; // スリープ解除
       }
 
-      // 2. エッジによる引力 (Attraction)
-      targetEdges.forEach(({ source, target }) => {
-        const posA = nodePositions.get(source);
-        const posB = nodePositions.get(target);
-        if (posA && posB) {
-          const dir = new THREE.Vector3().subVectors(posB, posA);
-          const dist = dir.length();
-          if (dist > settings.linkDistance) {
-            dir.normalize().multiplyScalar(attractionStrength * (dist - settings.linkDistance));
-            posA.add(dir);
-            posB.sub(dir);
+      // ユーザーがドラッグ（カメラ操作含む）している場合もスリープを延長/解除
+      if (isDragging || isRightDragging || draggedInstanceId3D !== null) {
+        stepCount3D = 0;
+      }
+
+      const isCooling = stepCount3D >= maxSteps3D;
+
+      if (!isCooling) {
+        stepCount3D++;
+        // 1. 全ノード間の反発力 (距離の二乗に反比例するクーロン力風の反発)
+        const repulsionStrength = settings3DRef.current.repulsion * 5.0;
+        const attractionStrength = settings3DRef.current.linkForce * 0.05;
+        const centerStrength = settings3DRef.current.centerForce * 0.01;
+
+        const skipRepulsion = targetNodes.length > 800 && (stepCount3D % 2 === 0);
+
+        if (!skipRepulsion) {
+          for (let i = 0; i < targetNodes.length; i++) {
+            const nodeA = targetNodes[i];
+            if (fixedNodes3D.current[nodeA]) continue;
+
+            const posA = nodePositions.get(nodeA)!;
+            const step = targetNodes.length > 1000 ? 2 : 1;
+            for (let j = i + 1; j < targetNodes.length; j += step) {
+              const nodeB = targetNodes[j];
+              const posB = nodePositions.get(nodeB)!;
+              
+              const dir = new THREE.Vector3().subVectors(posA, posB);
+              const distSq = dir.lengthSq() || 0.01;
+
+              // 距離が非常に近くてもゼロ除算を防ぐ
+              // 距離の2乗に反比例する反発力
+              const force = repulsionStrength / distSq;
+              // 移動ベクトルを計算して加算
+              dir.normalize().multiplyScalar(force * 0.1);
+              posA.add(dir);
+              if (!fixedNodes3D.current[nodeB]) {
+                posB.sub(dir);
+              }
+            }
           }
         }
-      });
 
-      // 3. 重心に向かう引力 (Center Force)
+        // 2. エッジによるバネ力 (目標距離 linkDistance に収束させようとする結合力)
+        targetEdges.forEach(({ source, target }) => {
+          const posA = nodePositions.get(source);
+          const posB = nodePositions.get(target);
+          if (posA && posB) {
+            const dir = new THREE.Vector3().subVectors(posB, posA);
+            const dist = dir.length() || 0.01;
+            // 目標距離（linkDistance）との差分をバネ変位とする
+            const diff = dist - settings3DRef.current.linkDistance;
+            
+            // 差分に比例した力（離れていたら引力、近すぎたら反発力）
+            const force = diff * attractionStrength;
+            const moveVec = dir.normalize().multiplyScalar(force);
+
+            if (!fixedNodes3D.current[source]) {
+              posA.add(moveVec);
+            }
+            if (!fixedNodes3D.current[target]) {
+              posB.sub(moveVec);
+            }
+          }
+        });
+
+        // 3. 重心に向かう引力 (Center Force - 原点から離れすぎないようにする)
+        targetNodes.forEach((node) => {
+          if (fixedNodes3D.current[node]) return;
+          const pos = nodePositions.get(node)!;
+          pos.multiplyScalar(1 - centerStrength);
+        });
+      }
+
+      // 4. 流動（ゆらぎ）モーションの追加 (手動ドラッグ固定されていないノード)
+      const now = Date.now();
       targetNodes.forEach((node) => {
+        if (fixedNodes3D.current[node]) return;
+
+        // ノード名ハッシュによる各位相オフセットの付与
+        let hash = 0;
+        for (let idx = 0; idx < node.length; idx++) {
+          hash = (hash << 5) - hash + node.charCodeAt(idx);
+        }
+        const offset = Math.abs(hash) % 1000;
+
         const pos = nodePositions.get(node)!;
-        pos.multiplyScalar(1 - centerStrength);
+
+        // 呼吸するようにゆったり動く波
+        const jitterX = Math.sin((now * 0.0006) + offset) * 0.02;
+        const jitterY = Math.cos((now * 0.0006) + offset) * 0.02;
+        const jitterZ = Math.sin((now * 0.0008) + offset) * 0.02;
+
+        pos.x += jitterX;
+        pos.y += jitterY;
+        pos.z += jitterZ;
       });
 
       // ノードの3D位置行列およびエッジの線を更新
@@ -737,7 +1074,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         const pos = nodePositions.get(node)!;
         const baseScale = graph.getNodeAttribute(node, 'size') / 8.0;
         tempObject.position.copy(pos);
-        tempObject.scale.setScalar(baseScale * settings.nodeSize);
+        tempObject.scale.setScalar(baseScale * settings3DRef.current.nodeSize);
         tempObject.updateMatrix();
         instancedMesh.setMatrixAt(i, tempObject.matrix);
       });
@@ -757,7 +1094,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       positionsAttr.needsUpdate = true;
 
       // 矢印位置と方向の更新
-      if (settings.showArrows) {
+      if (settings3DRef.current.showArrows) {
         let arrowIdx = 0;
         targetEdges.forEach(({ source, target }) => {
           const posA = nodePositions.get(source);
@@ -816,6 +1153,64 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         }
       }
 
+      // 常時表示ラベルのプロジェクションマッピング更新 (画面内のノードのみ & カメラに近い上位100個に制限)
+      const labelsContainer = document.getElementById('labels-container-3d');
+      if (labelsContainer) {
+        if (!settings3DRef.current.showLabels) {
+          labelsContainer.innerHTML = '';
+        } else {
+          // カメラ視錐台 (Frustum) の構築
+          const frustum = new THREE.Frustum();
+          const projScreenMatrix = new THREE.Matrix4();
+          projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+          frustum.setFromProjectionMatrix(projScreenMatrix);
+
+          // 視野内のノードを抽出し、カメラからの距離を計算
+          const visibleNodes: { name: string; pos: THREE.Vector3; dist: number }[] = [];
+          targetNodes.forEach((nodeName) => {
+            const worldPos = nodePositions.get(nodeName);
+            if (worldPos) {
+              if (frustum.containsPoint(worldPos)) {
+                const dist = camera.position.distanceTo(worldPos);
+                visibleNodes.push({ name: nodeName, pos: worldPos, dist });
+              }
+            }
+          });
+
+          // 近い順にソートし、最大100個までに制限
+          visibleNodes.sort((a, b) => a.dist - b.dist);
+          const limit = 100;
+          const displayNodes = visibleNodes.slice(0, limit);
+
+          // DOM要素数の調整と中身の同期
+          let childNodes = labelsContainer.children;
+          if (childNodes.length !== displayNodes.length) {
+            labelsContainer.innerHTML = '';
+            displayNodes.forEach(() => {
+              const labelDiv = document.createElement('div');
+              labelDiv.className = 'absolute text-[9px] text-gray-300 font-medium px-1 py-0.5 pointer-events-none whitespace-nowrap bg-black/60 rounded border border-white/5';
+              labelDiv.style.transform = 'translate(-50%, -100%)';
+              labelsContainer.appendChild(labelDiv);
+            });
+            childNodes = labelsContainer.children;
+          }
+
+          // 各DOM要素に位置とテキストを適用
+          displayNodes.forEach((nodeInfo, idx) => {
+            const el = childNodes[idx] as HTMLDivElement;
+            if (el) {
+              const screenPos = nodeInfo.pos.clone().project(camera);
+              const x = (screenPos.x * 0.5 + 0.5) * width;
+              const y = (-(screenPos.y * 0.5) + 0.5) * height;
+              el.textContent = nodeInfo.name;
+              el.style.display = 'block';
+              el.style.left = `${x}px`;
+              el.style.top = `${y - 10}px`;
+            }
+          });
+        }
+      }
+
       renderer.render(scene, camera);
       animationFrameId = requestAnimationFrame(animate);
     };
@@ -837,7 +1232,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       container.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       container.removeEventListener('wheel', handleWheel);
-      container.removeEventListener('click', handleClick);
+      container.removeEventListener('dblclick', handleDoubleClick);
       container.removeEventListener('contextmenu', preventDefault);
       window.removeEventListener('resize', handleResize);
 
@@ -849,19 +1244,25 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       nodeMaterial.dispose();
       lineGeometry.dispose();
       lineMaterial.dispose();
-      if (settings.showArrows) {
-        arrows.forEach((arrow) => {
-          arrow.geometry.dispose();
-          if (Array.isArray(arrow.material)) {
-            arrow.material.forEach((m) => m.dispose());
-          } else {
-            arrow.material.dispose();
-          }
-        });
-      }
+      coneGeometry.dispose();
+      coneMaterial.dispose();
       renderer.dispose();
+      lineMaterialRef.current = null;
+      coneMaterialRef.current = null;
     };
-  }, [graph, activeElements, viewMode, settings, groupRules, notes, onSelectNote]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, settings3D.linkDistance, settings3D.nodeSize, settings3D.linkThickness, groupRules, notes, onSelectNote]);
+
+  // 3D リンク表示・矢印表示の切り替え時にマテリアルの不透明度を動的に更新（再描画・再配置をトリガーしない）
+  useEffect(() => {
+    if (lineMaterialRef.current) {
+      lineMaterialRef.current.opacity = settings3D.showLinks ? 0.6 : 0.0;
+      lineMaterialRef.current.needsUpdate = true;
+    }
+    if (coneMaterialRef.current) {
+      coneMaterialRef.current.opacity = (settings3D.showLinks && settings3D.showArrows) ? 1.0 : 0.0;
+      coneMaterialRef.current.needsUpdate = true;
+    }
+  }, [settings3D.showLinks, settings3D.showArrows]);
 
   return (
     <div className="h-screen bg-[#070a13] text-gray-100 flex relative select-none">
@@ -1010,6 +1411,24 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                 />
                 接続の矢印表示
               </label>
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.showLinks}
+                  onChange={(e) => setSettings({ ...settings, showLinks: e.target.checked })}
+                  className="rounded text-indigo-600 bg-black/40 border-white/10"
+                />
+                リンク（線）を表示する
+              </label>
+              <label className="flex items-center gap-2 text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.showLabels}
+                  onChange={(e) => setSettings({ ...settings, showLabels: e.target.checked })}
+                  className="rounded text-indigo-600 bg-black/40 border-white/10"
+                />
+                ファイル名を表示する
+              </label>
               <div className="space-y-1">
                 <div className="flex justify-between text-gray-400">
                   <span>ノードの大きさ</span>
@@ -1017,7 +1436,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                 </div>
                 <input
                   type="range"
-                  min="0.5"
+                  min={viewMode === '3D' ? '0.1' : '0.5'}
                   max="3"
                   step="0.1"
                   value={settings.nodeSize}
@@ -1085,7 +1504,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                 <input
                   type="range"
                   min="0.1"
-                  max="3"
+                  max={viewMode === '3D' ? '10' : '3'}
                   step="0.1"
                   value={settings.repulsion}
                   onChange={(e) => setSettings({ ...settings, repulsion: Number(e.target.value) })}
@@ -1114,7 +1533,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                 </div>
                 <input
                   type="range"
-                  min="5"
+                  min="1"
                   max="40"
                   step="1"
                   value={settings.linkDistance}
@@ -1122,6 +1541,13 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
                   className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                 />
               </div>
+              <button
+                onClick={handleResetCoordinates}
+                className="w-full flex items-center justify-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded py-2 mt-2 font-medium transition-colors border border-white/5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                配置をリセットする
+              </button>
             </div>
           </div>
 
@@ -1145,19 +1571,21 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         <div className={`w-full h-full min-h-[300px] ${viewMode === '2D' ? '' : 'hidden'}`} ref={containerRef2D} />
         <div className={`w-full h-full min-h-[300px] relative ${viewMode === '3D' ? '' : 'hidden'}`}>
           <div className="w-full h-full cursor-grab active:cursor-grabbing" ref={containerRef3D} />
+          {/* 3Dノード名常時表示用コンテナ */}
+          <div id="labels-container-3d" className="absolute inset-0 pointer-events-none overflow-hidden z-10" />
           <div
             ref={tooltipRef}
             style={{ display: 'none' }}
             className="absolute pointer-events-none bg-[#0b1020]/95 border border-indigo-500/30 text-indigo-200 text-xs py-1.5 px-3 rounded shadow-xl font-medium backdrop-blur-md z-20"
           />
           <div className="absolute bottom-4 left-4 pointer-events-none bg-[#0b1020]/80 border border-white/5 text-gray-400 text-[10px] py-1.5 px-3 rounded backdrop-blur z-20 space-y-0.5">
-            <p>左ドラッグ：カメラ回転</p>
+            <p>左ドラッグ：カメラ回転 / ノードドラッグ</p>
             <p>右ドラッグ：カメラ並行移動</p>
             <p>ホイール　：ズーム</p>
           </div>
         </div>
 
-        {/* 右下フローティング操作パネル (B案) */}
+        {/* 右下フローティング操作パネル */}
         <div className="absolute bottom-4 right-4 z-20 flex items-center gap-3 bg-[#0b1020]/90 border border-white/10 rounded-lg p-2 shadow-2xl backdrop-blur-md no-drag">
           <div className="flex items-center bg-[#070a13] border border-white/10 rounded-full p-0.5">
             <button
