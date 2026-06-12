@@ -112,7 +112,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   const settings = viewMode === '2D' ? settings2D : settings3D;
   const setSettings = viewMode === '2D' ? setSettings2D : setSettings3D;
 
-  // 手動でドラッグして固定されたノードの座標管理用Ref
+  // 手動でドラッグして固定されたノードの座標管理用Ref (初期化時は一度空にする)
   const fixedNodes2D = useRef<Record<string, { x: number; y: number }>>({});
   const fixedNodes3D = useRef<Record<string, { x: number; y: number; z?: number }>>({});
 
@@ -442,10 +442,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     });
 
     const nodesArray = subGraph.nodes();
-    const edgesArray = subGraph.edges().map((edge) => {
-      const ext = subGraph.extremities(edge);
-      return { source: ext[0], target: ext[1] };
-    });
 
     // 初期2D配置 (手動固定された座標がある場合は適用、なければ円形配置)
     subGraph.nodes().forEach((node, index) => {
@@ -486,130 +482,90 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       if (found) onSelectNote(found);
     });
 
-    // 2D用リアルタイムフレーム力学計算
+    // --- 2D標準の ForceAtlas2 WebWorker 物理エンジンの復活 ---
+    let worker: any = null;
     let animationFrameId2D: number;
-    let frameCounter = 0;
 
-    const animate2D = () => {
-      let totalPosDiff = 0;
-      const centerStrength = settings2DRef.current.centerForce * 0.01;
-      const repulsionStrength = settings2DRef.current.repulsion * 5.0;
-      const attractionStrength = settings2DRef.current.linkForce * 0.02;
+    import('graphology-layout-forceatlas2/worker').then(({ default: FA2LayoutWorker }) => {
+      if (!sigmaRef.current || viewMode !== '2D') return;
 
-      // 1. ノード間の反発力
-      for (let i = 0; i < nodesArray.length; i++) {
-        const nodeA = nodesArray[i];
-        if (fixedNodes2D.current[nodeA]) continue; // 手動固定ノードは動かさない
+      worker = new FA2LayoutWorker(subGraph, {
+        settings: {
+          gravity: settings2DRef.current.centerForce * 0.5,
+          scalingRatio: settings2DRef.current.repulsion * 5.0,
+          strongGravityMode: true,
+          slowDown: 2.0, // 以前の普通のアニメーションスピード
+          barnesHutOptimize: nodesArray.length > 300,
+          barnesHutTheta: 0.6,
+        }
+      });
 
-        const ax = subGraph.getNodeAttribute(nodeA, 'x') as number;
-        const ay = subGraph.getNodeAttribute(nodeA, 'y') as number;
+      // 物理演算開始
+      worker.start();
 
-        for (let j = i + 1; j < nodesArray.length; j++) {
-          const nodeB = nodesArray[j];
-          const bx = subGraph.getNodeAttribute(nodeB, 'x') as number;
-          const by = subGraph.getNodeAttribute(nodeB, 'y') as number;
+      // 一定時間（3〜5秒）経過後に自動停止してCPU負荷を下げる
+      const autoStopDelay = nodesArray.length > 500 ? 3000 : 5000;
+      const timer = setTimeout(() => {
+        if (worker && typeof worker.stop === 'function') {
+          worker.stop();
+        }
+      }, autoStopDelay);
 
-          const dx = bx - ax;
-          const dy = by - ay;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-          const minDist = settings2DRef.current.linkDistance * 2.0;
+      // 流動（ゆらぎ）モーション用の毎フレームのアニメーション制御
+      const animate2D = () => {
+        const now = Date.now();
+        let changed = false;
 
-          if (dist < minDist) {
-            const force = (repulsionStrength * (minDist - dist)) / (dist * 10);
-            const fx = dx * force;
-            const fy = dy * force;
-
-            subGraph.setNodeAttribute(nodeA, 'x', ax - fx);
-            subGraph.setNodeAttribute(nodeA, 'y', ay - fy);
-            if (!fixedNodes2D.current[nodeB]) {
-              subGraph.setNodeAttribute(nodeB, 'x', bx + fx);
-              subGraph.setNodeAttribute(nodeB, 'y', by + fy);
+        nodesArray.forEach((node) => {
+          if (fixedNodes2D.current[node]) {
+            // 固定されたノードはドラッグ座標を厳密に維持
+            subGraph.setNodeAttribute(node, 'x', fixedNodes2D.current[node].x);
+            subGraph.setNodeAttribute(node, 'y', fixedNodes2D.current[node].y);
+          } else {
+            // 固定されていないノードは滑らかに浮遊ゆらぎ
+            let hash = 0;
+            for (let idx = 0; idx < node.length; idx++) {
+              hash = (hash << 5) - hash + node.charCodeAt(idx);
             }
-            totalPosDiff += Math.abs(fx) + Math.abs(fy);
+            const offset = Math.abs(hash) % 1000;
+            const x = subGraph.getNodeAttribute(node, 'x') as number;
+            const y = subGraph.getNodeAttribute(node, 'y') as number;
+            
+            const jitterX = Math.sin((now * 0.0006) + offset) * 0.05;
+            const jitterY = Math.cos((now * 0.0006) + offset) * 0.05;
+            
+            subGraph.setNodeAttribute(node, 'x', x + jitterX);
+            subGraph.setNodeAttribute(node, 'y', y + jitterY);
+            changed = true;
           }
+        });
+
+        // 揺らぎがある時のみリフレッシュ
+        if (changed && sigmaRef.current) {
+          sigmaRef.current.refresh();
         }
-      }
 
-      // 2. リンクの引力
-      edgesArray.forEach(({ source, target }) => {
-        const ax = subGraph.getNodeAttribute(source, 'x') as number;
-        const ay = subGraph.getNodeAttribute(source, 'y') as number;
-        const bx = subGraph.getNodeAttribute(target, 'x') as number;
-        const by = subGraph.getNodeAttribute(target, 'y') as number;
+        animationFrameId2D = requestAnimationFrame(animate2D);
+      };
 
-        let dx = bx - ax;
-        let dy = by - ay;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const targetDist = settings2DRef.current.linkDistance * 1.2;
+      animate2D();
 
-        if (dist > targetDist) {
-          const force = attractionStrength * (dist - targetDist) * 0.2;
-          const fx = (dx / dist) * force;
-          const fy = (dy / dist) * force;
-
-          if (!fixedNodes2D.current[source]) {
-            subGraph.setNodeAttribute(source, 'x', ax + fx);
-            subGraph.setNodeAttribute(source, 'y', ay + fy);
-          }
-          if (!fixedNodes2D.current[target]) {
-            subGraph.setNodeAttribute(target, 'x', bx - fx);
-            subGraph.setNodeAttribute(target, 'y', by - fy);
-          }
-          totalPosDiff += Math.abs(fx) + Math.abs(fy);
+      return () => {
+        clearTimeout(timer);
+        if (worker) {
+          worker.kill();
         }
-      });
-
-      // 3. 中心引力
-      nodesArray.forEach((node) => {
-        if (fixedNodes2D.current[node]) return;
-
-        const x = subGraph.getNodeAttribute(node, 'x') as number;
-        const y = subGraph.getNodeAttribute(node, 'y') as number;
-        const dx = x * centerStrength;
-        const dy = y * centerStrength;
-        subGraph.setNodeAttribute(node, 'x', x - dx);
-        subGraph.setNodeAttribute(node, 'y', y - dy);
-        totalPosDiff += Math.abs(dx) + Math.abs(dy);
-      });
-
-      // 4. 流動（ゆらぎ）モーションの追加 (手動ドラッグ固定されていないノード)
-      const now = Date.now();
-      nodesArray.forEach((node) => {
-        if (fixedNodes2D.current[node]) return;
-
-        // ノード名ハッシュによる各位相オフセットの付与
-        let hash = 0;
-        for (let idx = 0; idx < node.length; idx++) {
-          hash = (hash << 5) - hash + node.charCodeAt(idx);
-        }
-        const offset = Math.abs(hash) % 1000;
-
-        const x = subGraph.getNodeAttribute(node, 'x') as number;
-        const y = subGraph.getNodeAttribute(node, 'y') as number;
-
-        // 呼吸するようにゆったり動く波
-        const jitterX = Math.sin((now * 0.0006) + offset) * 0.06;
-        const jitterY = Math.cos((now * 0.0006) + offset) * 0.06;
-
-        subGraph.setNodeAttribute(node, 'x', x + jitterX);
-        subGraph.setNodeAttribute(node, 'y', y + jitterY);
-      });
-
-      frameCounter++;
-      if (frameCounter % 2 === 0) {
-        sigma.refresh();
-      }
-
-      animationFrameId2D = requestAnimationFrame(animate2D);
-    };
-
-    animate2D();
+      };
+    });
 
     let draggedNode2D: string | null = null;
 
     sigma.on('downNode', (e) => {
       draggedNode2D = e.node;
       sigma.getCamera().disable();
+      if (worker && typeof worker.start === 'function') {
+        worker.start();
+      }
     });
 
     sigma.getMouseCaptor().on('mousemovebody', (e) => {
@@ -642,7 +598,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     const handleMouseUp2D = () => {
       if (draggedNode2D) {
-        // ドラッグしたノードの最終座標を fixedNodes2D に保存して永続化
         const finalX = subGraph.getNodeAttribute(draggedNode2D, 'x') as number;
         const finalY = subGraph.getNodeAttribute(draggedNode2D, 'y') as number;
         fixedNodes2D.current[draggedNode2D] = { x: finalX, y: finalY };
@@ -650,6 +605,12 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
         draggedNode2D = null;
         sigma.getCamera().enable();
+
+        setTimeout(() => {
+          if (worker && typeof worker.stop === 'function') {
+            worker.stop();
+          }
+        }, 1000);
       }
       if (tooltipRef.current) {
         tooltipRef.current.style.display = 'none';
@@ -670,7 +631,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     };
   }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, onSelectNote]);
 
-  // リンク表示やファイル名表示の切り替え時にSigmaを再描画（再シミュレーションなし）
+  // リンク表示やファイル名表示の切り替え時にSigmaを再描画
   useEffect(() => {
     if (sigmaRef.current) {
       const sizeThreshold = settings2D.showLabels 
@@ -711,7 +672,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     const { nodes: targetNodes, edges: targetEdges } = activeElements;
     const nodePositions = new Map<string, THREE.Vector3>();
 
-    // 3D初期配置（手動固定座標の復帰、なければフィボナッチ球状配置）
+    // 3D初期配置（手動固定座標の復帰、なければ標準的なフィボナッチ球状配置）
     targetNodes.forEach((node, i) => {
       if (fixedNodes3D.current[node]) {
         const saved = fixedNodes3D.current[node];
@@ -824,7 +785,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     let dragIntersection = new THREE.Vector3();
 
     const handleMouseDown = (e: MouseEvent) => {
-      // レイキャストでノードをドラッグ判定する
       const rect = container.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
@@ -832,19 +792,14 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       const intersects = raycaster.intersectObject(instancedMesh);
 
       if (e.button === 0 && intersects.length > 0) {
-        // ノードドラッグ開始
         const idx = intersects[0].instanceId;
         if (idx !== undefined) {
           draggedInstanceId3D = idx;
           const nodePos = nodePositions.get(targetNodes[idx])!;
-          
-          // カメラに対面するドラッグ平面を設定
           const planeNormal = new THREE.Vector3();
           camera.getWorldDirection(planeNormal);
           planeNormal.negate();
           dragPlane.setFromNormalAndCoplanarPoint(planeNormal, nodePos);
-          
-          // カメラ操作を停止
           isDragging = false;
         }
       } else {
@@ -861,13 +816,12 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
 
       if (draggedInstanceId3D !== null) {
-        // ノードドラッグ中
         raycaster.setFromCamera(mouse, camera);
         if (raycaster.ray.intersectPlane(dragPlane, dragIntersection)) {
           const nodeName = targetNodes[draggedInstanceId3D];
           const pos = nodePositions.get(nodeName)!;
           pos.copy(dragIntersection);
-          stepCount3D = 0; // スリープ解除して再描画
+          stepCount3D = 0; // スリープ解除
 
           if (tooltipRef.current) {
             tooltipRef.current.style.display = 'block';
@@ -880,7 +834,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           }
         }
       } else if (isDragging) {
-        // カメラ回転
         const dx = e.clientX - dragStart.x;
         const dy = e.clientY - dragStart.y;
         targetRotation.y -= dx * 0.005;
@@ -889,7 +842,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         dragStart.x = e.clientX;
         dragStart.y = e.clientY;
       } else if (isRightDragging) {
-        // カメラ平行移動
         const dx = e.clientX - dragStart.x;
         const dy = e.clientY - dragStart.y;
         const scale = distance * 0.001;
@@ -948,7 +900,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     // アニメーションフレーム (ここで物理計算を毎フレーム行う)
     let animationFrameId: number;
     let stepCount3D = 0;
-    const maxSteps3D = 100; // ウォームアップ済みのため、初期微調整は100ステップで十分
+    const maxSteps3D = 100; // 初期微調整は100ステップで十分
 
     // 外部の settings3D 変更を検知して物理演算を再稼働（ウェイクアップ）させるための監視
     let lastRepulsion = settings3DRef.current.repulsion;
@@ -980,10 +932,11 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
       if (!isCooling) {
         stepCount3D++;
-        // 1. 全ノード間の反発力 (距離の二乗に反比例するクーロン力風の反発)
-        const repulsionStrength = settings3DRef.current.repulsion * 5.0;
-        const attractionStrength = settings3DRef.current.linkForce * 0.05;
-        const centerStrength = settings3DRef.current.centerForce * 0.01;
+        
+        // --- 以前の普通で正しい3D物理演算モデルの復元 ---
+        const repulsionStrength = settings3DRef.current.repulsion * 0.05;
+        const attractionStrength = settings3DRef.current.linkForce * 0.01;
+        const centerStrength = settings3DRef.current.centerForce * 0.005;
 
         const skipRepulsion = targetNodes.length > 800 && (stepCount3D % 2 === 0);
 
@@ -1000,44 +953,40 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
               
               const dir = new THREE.Vector3().subVectors(posA, posB);
               const distSq = dir.lengthSq() || 0.01;
+              const minDist = settings3DRef.current.linkDistance * 0.8;
 
-              // 距離が非常に近くてもゼロ除算を防ぐ
-              // 距離の2乗に反比例する反発力
-              const force = repulsionStrength / distSq;
-              // 移動ベクトルを計算して加算
-              dir.normalize().multiplyScalar(force * 0.1);
-              posA.add(dir);
-              if (!fixedNodes3D.current[nodeB]) {
-                posB.sub(dir);
+              // 近いもの同士だけを押し出す元のシンプルな反発力
+              if (distSq < minDist * minDist) {
+                dir.normalize().multiplyScalar(repulsionStrength * (minDist - Math.sqrt(distSq)));
+                posA.add(dir);
+                if (!fixedNodes3D.current[nodeB]) {
+                  posB.sub(dir);
+                }
               }
             }
           }
         }
 
-        // 2. エッジによるバネ力 (目標距離 linkDistance に収束させようとする結合力)
+        // 2. エッジによる引力 (リンク距離より離れたら引き合う元のロジック)
         targetEdges.forEach(({ source, target }) => {
           const posA = nodePositions.get(source);
           const posB = nodePositions.get(target);
           if (posA && posB) {
             const dir = new THREE.Vector3().subVectors(posB, posA);
-            const dist = dir.length() || 0.01;
-            // 目標距離（linkDistance）との差分をバネ変位とする
-            const diff = dist - settings3DRef.current.linkDistance;
-            
-            // 差分に比例した力（離れていたら引力、近すぎたら反発力）
-            const force = diff * attractionStrength;
-            const moveVec = dir.normalize().multiplyScalar(force);
-
-            if (!fixedNodes3D.current[source]) {
-              posA.add(moveVec);
-            }
-            if (!fixedNodes3D.current[target]) {
-              posB.sub(moveVec);
+            const dist = dir.length();
+            if (dist > settings3DRef.current.linkDistance) {
+              const forceVec = dir.normalize().multiplyScalar(attractionStrength * (dist - settings3DRef.current.linkDistance));
+              if (!fixedNodes3D.current[source]) {
+                posA.add(forceVec);
+              }
+              if (!fixedNodes3D.current[target]) {
+                posB.sub(forceVec);
+              }
             }
           }
         });
 
-        // 3. 重心に向かう引力 (Center Force - 原点から離れすぎないようにする)
+        // 3. 重心に向かう引力
         targetNodes.forEach((node) => {
           if (fixedNodes3D.current[node]) return;
           const pos = nodePositions.get(node)!;
@@ -1050,7 +999,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       targetNodes.forEach((node) => {
         if (fixedNodes3D.current[node]) return;
 
-        // ノード名ハッシュによる各位相オフセットの付与
         let hash = 0;
         for (let idx = 0; idx < node.length; idx++) {
           hash = (hash << 5) - hash + node.charCodeAt(idx);
@@ -1059,7 +1007,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
         const pos = nodePositions.get(node)!;
 
-        // 呼吸するようにゆったり動く波
+        // 呼吸するような微小なゆらぎ
         const jitterX = Math.sin((now * 0.0006) + offset) * 0.02;
         const jitterY = Math.cos((now * 0.0006) + offset) * 0.02;
         const jitterZ = Math.sin((now * 0.0008) + offset) * 0.02;
@@ -1159,13 +1107,11 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         if (!settings3DRef.current.showLabels) {
           labelsContainer.innerHTML = '';
         } else {
-          // カメラ視錐台 (Frustum) の構築
           const frustum = new THREE.Frustum();
           const projScreenMatrix = new THREE.Matrix4();
           projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
           frustum.setFromProjectionMatrix(projScreenMatrix);
 
-          // 視野内のノードを抽出し、カメラからの距離を計算
           const visibleNodes: { name: string; pos: THREE.Vector3; dist: number }[] = [];
           targetNodes.forEach((nodeName) => {
             const worldPos = nodePositions.get(nodeName);
@@ -1177,12 +1123,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             }
           });
 
-          // 近い順にソートし、最大100個までに制限
           visibleNodes.sort((a, b) => a.dist - b.dist);
           const limit = 100;
           const displayNodes = visibleNodes.slice(0, limit);
 
-          // DOM要素数の調整と中身の同期
           let childNodes = labelsContainer.children;
           if (childNodes.length !== displayNodes.length) {
             labelsContainer.innerHTML = '';
@@ -1195,7 +1139,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             childNodes = labelsContainer.children;
           }
 
-          // 各DOM要素に位置とテキストを適用
           displayNodes.forEach((nodeInfo, idx) => {
             const el = childNodes[idx] as HTMLDivElement;
             if (el) {
@@ -1252,7 +1195,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     };
   }, [graph, activeElements, viewMode, isSettingsLoaded, settings3D.linkDistance, settings3D.nodeSize, settings3D.linkThickness, groupRules, notes, onSelectNote]);
 
-  // 3D リンク表示・矢印表示の切り替え時にマテリアルの不透明度を動的に更新（再描画・再配置をトリガーしない）
+  // 3D リンク表示・矢印表示の切り替え時にマテリアルの不透明度を動的に更新
   useEffect(() => {
     if (lineMaterialRef.current) {
       lineMaterialRef.current.opacity = settings3D.showLinks ? 0.6 : 0.0;
