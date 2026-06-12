@@ -327,6 +327,28 @@ function extractTags(content) {
     }
   }
 
+  // フロントマターがない場合のフォールバック（本文内の「タグ: ...」「tags: ...」行から抽出）
+  if (tags.length === 0) {
+    const lines = safeContent.split('\n');
+    for (const line of lines) {
+      const match = line.match(/^(?:タグ|tags|tag)\s*[:：]\s*(.+)$/i);
+      if (match) {
+        const rawTags = match[1].trim();
+        if (rawTags.startsWith('[') && rawTags.endsWith(']')) {
+          rawTags.slice(1, -1).split(',').forEach(t => {
+            const cleaned = t.trim().replace(/['"]/g, '');
+            if (cleaned && !tags.includes(cleaned)) tags.push(cleaned);
+          });
+        } else {
+          rawTags.split(/[,，、\s]+/).forEach(t => {
+            const cleaned = t.trim().replace(/['"]/g, '').replace(/^#/, '');
+            if (cleaned && !tags.includes(cleaned)) tags.push(cleaned);
+          });
+        }
+      }
+    }
+  }
+
   return tags;
 }
 

@@ -33,7 +33,13 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import GraphView from './GraphView';
-import { AiModelMode, AiSpeedMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle } from './lib/gemini';
+import { AiModelMode, AiSpeedMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, SYSTEM_PROMPTS } from './lib/gemini';
+
+interface CustomPrompt {
+  id: string;
+  name: string;
+  prompt: string;
+}
 
 interface Note {
   name: string;
@@ -49,6 +55,7 @@ interface AppConfig {
   notesPath: string;
   gitRemoteUrl: string;
   autoSync: boolean;
+  customPrompts?: CustomPrompt[];
 }
 
 const emptyConfig: AppConfig = {
@@ -56,9 +63,10 @@ const emptyConfig: AppConfig = {
   notesPath: '',
   gitRemoteUrl: '',
   autoSync: false,
+  customPrompts: [],
 };
 
-type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph';
+type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph' | 'search';
 
 function cleanFilename(value: string) {
   const name = value.trim().replace(/[\\/:*?"<>|]/g, '-');
@@ -165,13 +173,19 @@ export default function App() {
   const [gitError, setGitError] = useState<string | null>(null);
 
   const [chatInput, setChatInput] = useState('');
+  const [newTagInput, setNewTagInput] = useState('');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [chatMode, setChatMode] = useState<ChatMode>('deep-think');
+  const [chatMode, setChatMode] = useState<string>('deep-think');
   const [aiSpeedMode, setAiSpeedMode] = useState<AiSpeedMode>('fast');
   const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [pendingPrompt, setPendingPrompt] = useState<{ name: string; prompt: string } | null>(null);
+  const [newPromptName, setNewPromptName] = useState('');
+  const [newPromptText, setNewPromptText] = useState('');
+  const [expandedTags, setExpandedTags] = useState<string[]>([]);
+  const [expandedLinks, setExpandedLinks] = useState<string[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -182,6 +196,49 @@ export default function App() {
     if (!query) return notes;
     return notes.filter((note) => note.name.toLowerCase().includes(query));
   }, [notes, searchQuery]);
+
+  // 全タグ一覧用データの抽出
+  const allTagsMap = useMemo(() => {
+    const map: Record<string, Note[]> = {};
+    for (const note of notes) {
+      const tags = note.tags || [];
+      for (const tag of tags) {
+        if (!map[tag]) {
+          map[tag] = [];
+        }
+        map[tag].push(note);
+      }
+    }
+    return map;
+  }, [notes]);
+
+  // 全ノートのリンク関係（発リンク・被リンク）データの解決
+  const globalLinksMap = useMemo(() => {
+    const map: Record<string, { outgoing: string[]; incoming: string[] }> = {};
+    
+    for (const note of notes) {
+      const cleanName = note.name.replace(/\.md$/i, '');
+      map[cleanName] = { outgoing: [], incoming: [] };
+    }
+
+    for (const note of notes) {
+      const sourceName = note.name.replace(/\.md$/i, '');
+      const outgoing = note.wikiLinks || [];
+      
+      if (map[sourceName]) {
+        map[sourceName].outgoing = outgoing;
+      }
+
+      for (const dest of outgoing) {
+        if (map[dest]) {
+          if (!map[dest].incoming.includes(sourceName)) {
+            map[dest].incoming.push(sourceName);
+          }
+        }
+      }
+    }
+    return map;
+  }, [notes]);
 
   async function loadNotesList() {
     setIsLoading(true);
@@ -331,10 +388,147 @@ export default function App() {
     setShowRenameModal(true);
   }
 
+  // タグ更新・追加・削除ロジック
+  async function updateNoteTags(targetNote: Note, nextTags: string[]) {
+    let newContent = content;
+    // タグ行のパターン
+    const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
+    const dateLineRegex = /^(作成日時\s*[:：]\s*[^\n\r]*)/m;
+
+    const tagsString = nextTags.join(', ');
+
+    if (tagLineRegex.test(newContent)) {
+      // 既存のタグ行を置換
+      newContent = newContent.replace(tagLineRegex, `タグ: ${tagsString}`);
+    } else if (dateLineRegex.test(newContent)) {
+      // 作成日時行の直後にタグ行を挿入
+      newContent = newContent.replace(dateLineRegex, (match) => `${match}\nタグ: ${tagsString}`);
+    } else {
+      // どちらもなければファイルの先頭に挿入
+      newContent = `タグ: ${tagsString}\n\n${newContent}`;
+    }
+
+    setContent(newContent);
+    setNoteContext(newContent);
+    
+    // 保存
+    const result = await window.electronAPI.saveNote({ filename: targetNote.name, content: newContent });
+    if (result.success) {
+      setSelectedNote(prev => prev ? { ...prev, tags: nextTags, content: newContent } : null);
+      await loadNotesList();
+    }
+  }
+
+  async function handleAddTag(tag: string) {
+    if (!selectedNote || !tag.trim()) return;
+    const cleanTag = tag.trim().replace(/^#/, '');
+    const currentTags = selectedNote.tags || [];
+    if (currentTags.includes(cleanTag)) return;
+    const nextTags = [...currentTags, cleanTag];
+    await updateNoteTags(selectedNote, nextTags);
+    setNewTagInput('');
+  }
+
+  async function handleRemoveTag(tagToRemove: string) {
+    if (!selectedNote) return;
+    const currentTags = selectedNote.tags || [];
+    const nextTags = currentTags.filter(t => t !== tagToRemove);
+    await updateNoteTags(selectedNote, nextTags);
+  }
+
+  // モード解決関数
+  function getSystemPrompt(mode: string): string {
+    if (mode in SYSTEM_PROMPTS) {
+      return SYSTEM_PROMPTS[mode as ChatMode];
+    }
+    const custom = (config.customPrompts || []).find(p => p.id === mode);
+    return custom ? custom.prompt : SYSTEM_PROMPTS['deep-think'];
+  }
+
+  // プロンプトを本文から検出し、自動登録する（手動保存や「はい」選択時に使用）
+  async function scanAndRegisterPrompts(text: string, forcePrompts?: { name: string; prompt: string }[]) {
+    let updated = false;
+    const nextCustomPrompts = [...(config.customPrompts || [])];
+
+    if (forcePrompts) {
+      for (const p of forcePrompts) {
+        const existingIdx = nextCustomPrompts.findIndex(cp => cp.name.toLowerCase() === p.name.toLowerCase());
+        if (existingIdx >= 0) {
+          if (nextCustomPrompts[existingIdx].prompt !== p.prompt) {
+            nextCustomPrompts[existingIdx] = { id: nextCustomPrompts[existingIdx].id, name: p.name, prompt: p.prompt };
+            updated = true;
+          }
+        } else {
+          const newPrompt = { id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name: p.name, prompt: p.prompt };
+          nextCustomPrompts.push(newPrompt);
+          updated = true;
+        }
+      }
+    }
+
+    const promptBlockRegex = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/gi;
+    let match;
+    while ((match = promptBlockRegex.exec(text)) !== null) {
+      const name = match[1].trim();
+      const promptText = match[2].trim();
+      if (!name || !promptText) continue;
+
+      const existingIdx = nextCustomPrompts.findIndex(cp => cp.name.toLowerCase() === name.toLowerCase());
+      if (existingIdx >= 0) {
+        if (nextCustomPrompts[existingIdx].prompt !== promptText) {
+          nextCustomPrompts[existingIdx] = { id: nextCustomPrompts[existingIdx].id, name, prompt: promptText };
+          updated = true;
+        }
+      } else {
+        const newPrompt = { id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name, prompt: promptText };
+        nextCustomPrompts.push(newPrompt);
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      const newConfig = { ...config, customPrompts: nextCustomPrompts };
+      setConfig(newConfig);
+      await window.electronAPI.saveConfig(newConfig);
+    }
+  }
+
+  // 設定画面での手動追加・削除
+  async function handleAddCustomPrompt(name: string, promptText: string) {
+    if (!name.trim() || !promptText.trim()) return;
+    const nextCustomPrompts = [...(config.customPrompts || [])];
+    const existingIdx = nextCustomPrompts.findIndex(cp => cp.name.toLowerCase() === name.trim().toLowerCase());
+    if (existingIdx >= 0) {
+      alert('同じ名前のプロンプトが既に存在します。');
+      return;
+    }
+    const newPrompt = { id: `custom-${Date.now()}`, name: name.trim(), prompt: promptText.trim() };
+    nextCustomPrompts.push(newPrompt);
+    const newConfig = { ...config, customPrompts: nextCustomPrompts };
+    setConfig(newConfig);
+    await window.electronAPI.saveConfig(newConfig);
+    setNewPromptName('');
+    setNewPromptText('');
+  }
+
+  async function handleDeleteCustomPrompt(id: string) {
+    if (!window.confirm('このプロンプトを削除しますか？')) return;
+    const nextCustomPrompts = (config.customPrompts || []).filter(cp => cp.id !== id);
+    const newConfig = { ...config, customPrompts: nextCustomPrompts };
+    setConfig(newConfig);
+    await window.electronAPI.saveConfig(newConfig);
+    if (chatMode === id) {
+      setChatMode('deep-think');
+    }
+  }
+
   async function saveCurrentNote() {
     if (!selectedNote) return;
     setIsSaving(true);
     setSaveOk(false);
+    
+    await scanAndRegisterPrompts(content);
+
     const result = await window.electronAPI.saveNote({ filename: selectedNote.name, content });
     setIsSaving(false);
     if (!result.success) {
@@ -345,6 +539,22 @@ export default function App() {
     setNoteContext(content);
     setTimeout(() => setSaveOk(false), 1200);
     await loadNotesList();
+  }
+
+  async function createWikiNote(title: string) {
+    let name = cleanFilename(title);
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
+    const result = await window.electronAPI.saveNote({ filename: name, content: initial });
+    if (!result.success) {
+      alert(result.error ?? 'ノートを作成できませんでした');
+      return;
+    }
+    await loadNotesList();
+    const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
+    await openNote(note);
+    setEditMode('edit');
   }
 
   async function deleteCurrentNote() {
@@ -403,18 +613,55 @@ export default function App() {
     const block = `---\n\n## User\n\n${userPrompt.trim()}\n\n## AI\n\n${aiReply.trim()}`;
     setAutoSaveStatus('saving');
     try {
+      // 会話からタグを自動生成
+      const extracted = await generateNoteTags(config.geminiApiKey, userPrompt, aiReply);
+
+      // AIの返答から [PROMPT] ブロックを検出
+      const promptBlockRegex = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/i;
+      const promptMatch = promptBlockRegex.exec(aiReply);
+      if (promptMatch) {
+        const name = promptMatch[1].trim();
+        const promptText = promptMatch[2].trim();
+        if (name && promptText) {
+          setPendingPrompt({ name, prompt: promptText });
+        }
+      }
+
       if (selectedNote) {
+        const currentTags = selectedNote.tags || [];
+        const nextTags = Array.from(new Set([...currentTags, ...extracted]));
+
         await window.electronAPI.appendToNote({ filename: selectedNote.name, appendContent: block });
         const noteContent = await window.electronAPI.readNote(selectedNote.name);
-        setContent(noteContent);
-        setNoteContext(noteContent);
+        
+        // 保存済みの内容に対してタグを更新
+        let finalContent = noteContent;
+        const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
+        const dateLineRegex = /^(作成日時\s*[:：]\s*[^\n\r]*)/m;
+        const tagsString = nextTags.join(', ');
+
+        if (tagLineRegex.test(finalContent)) {
+          finalContent = finalContent.replace(tagLineRegex, `タグ: ${tagsString}`);
+        } else if (dateLineRegex.test(finalContent)) {
+          finalContent = finalContent.replace(dateLineRegex, (match) => `${match}\nタグ: ${tagsString}`);
+        } else {
+          finalContent = `タグ: ${tagsString}\n\n${finalContent}`;
+        }
+
+        // 更新したタグ付きのテキストを再度保存
+        await window.electronAPI.saveNote({ filename: selectedNote.name, content: finalContent });
+
+        setContent(finalContent);
+        setNoteContext(finalContent);
+        setSelectedNote(prev => prev ? { ...prev, tags: nextTags, content: finalContent } : null);
       } else {
         const title = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
         const filename = cleanFilename(title);
-        const fullContent = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\n\n${block}\n`;
+        const tagsString = extracted.join(', ');
+        const fullContent = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${tagsString}\n\n${block}\n`;
         const result = await window.electronAPI.saveNote({ filename, content: fullContent });
         if (result.success) {
-          const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: fullContent };
+          const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
           setSelectedNote(note);
           setContent(fullContent);
           setNoteContext(fullContent);
@@ -424,7 +671,8 @@ export default function App() {
       await loadNotesList();
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 2000);
-    } catch {
+    } catch (err) {
+      console.error('Auto save error:', err);
       setAutoSaveStatus('idle');
     }
   }
@@ -442,7 +690,7 @@ export default function App() {
 
     await client.chatStream(
       nextHistory,
-      chatMode,
+      getSystemPrompt(chatMode),
       aiSpeedMode,
       aiModelMode,
       noteContext,
@@ -504,6 +752,7 @@ export default function App() {
           <div className="mb-auto flex flex-col items-center gap-1">
             <RibbonButton icon={<FileText className="h-4 w-4" />} active={ribbonView === 'notes'} title="ノート" onClick={() => setRibbonView('notes')} />
             <RibbonButton icon={<Network className="h-4 w-4" />} active={ribbonView === 'graph'} title="グラフ" onClick={() => setRibbonView('graph')} />
+            <RibbonButton icon={<Search className="h-4 w-4" />} active={ribbonView === 'search'} title="検索/一覧" onClick={() => setRibbonView('search')} />
           </div>
           <div className="flex flex-col items-center gap-1">
             <button
@@ -543,56 +792,211 @@ export default function App() {
 
         {/* ノートリスト */}
         <aside className="flex w-64 shrink-0 flex-col border-r border-white/10 bg-[#0b1020]/70">
-          <div className="space-y-2 p-3">
-            <button
-              className="flex w-full items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-2 font-semibold hover:bg-indigo-500 transition-colors text-sm"
-              onClick={() => { setIsAiNoteMode(true); setShowNewNoteModal(true); }}
-            >
-              <Plus className="h-4 w-4" />
-              AIノート作成
-            </button>
-            <button
-              className="flex w-full items-center justify-center gap-2 rounded bg-gray-800 border border-white/10 px-3 py-2 font-semibold hover:bg-gray-700 transition-colors text-sm"
-              onClick={() => { setIsAiNoteMode(false); setShowNewNoteModal(true); }}
-            >
-              <Plus className="h-4 w-4" />
-              新規ノート作成
-            </button>
-            <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
-              <Search className="h-4 w-4 text-gray-500" />
-              <input
-                className="w-full bg-transparent text-sm outline-none"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="検索"
-              />
+          {ribbonView === 'search' ? (
+            <div className="flex flex-1 flex-col min-h-0">
+              <div className="p-3 border-b border-white/10">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">検索・一覧</h2>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-2 space-y-4 min-h-0">
+                {/* 1. タグ一覧セクション */}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-indigo-300">
+                    <span>▼ 全タグ一覧</span>
+                  </div>
+                  <div className="pl-2 space-y-1">
+                    {Object.keys(allTagsMap).length === 0 ? (
+                      <div className="px-2 py-1 text-xs text-gray-500">タグが見つかりません</div>
+                    ) : (
+                      Object.entries(allTagsMap).map(([tag, tagNotes]) => {
+                        const isExpanded = expandedTags.includes(tag);
+                        return (
+                          <div key={tag} className="space-y-0.5">
+                            <button
+                              onClick={() => {
+                                setExpandedTags(prev =>
+                                  isExpanded ? prev.filter(t => t !== tag) : [...prev, tag]
+                                );
+                              }}
+                              className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-emerald-400 hover:bg-white/5 transition-colors"
+                            >
+                              <span className="text-[10px] text-gray-500">{isExpanded ? '▼' : '▶'}</span>
+                              <span className="font-semibold truncate">#{tag} ({tagNotes.length})</span>
+                            </button>
+                            {isExpanded && (
+                              <div className="pl-4 border-l border-white/5 ml-2.5 space-y-0.5">
+                                {tagNotes.map(n => (
+                                  <button
+                                    key={n.name}
+                                    onClick={() => openNote(n)}
+                                    className={`flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left text-xs hover:bg-white/10 ${selectedNote?.name === n.name ? 'text-indigo-300 font-medium' : 'text-gray-400'}`}
+                                  >
+                                    <FileText className="h-3 w-3 shrink-0" />
+                                    <span className="truncate">{n.name.replace(/\.md$/i, '')}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. リンク一覧セクション */}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1 px-2 py-1 text-xs font-bold text-indigo-300">
+                    <span>▼ 全リンク一覧</span>
+                  </div>
+                  <div className="pl-2 space-y-1">
+                    {(() => {
+                      const notesWithLinks = notes.filter(n => {
+                        const cleanName = n.name.replace(/\.md$/i, '');
+                        const relations = globalLinksMap[cleanName] || { outgoing: [], incoming: [] };
+                        return relations.outgoing.length > 0 || relations.incoming.length > 0;
+                      });
+
+                      if (notesWithLinks.length === 0) {
+                        return <div className="px-2 py-1 text-xs text-gray-500">リンク関係があるノートがありません</div>;
+                      }
+
+                      return notesWithLinks.map(n => {
+                        const cleanName = n.name.replace(/\.md$/i, '');
+                        const isExpanded = expandedLinks.includes(cleanName);
+                        const relations = globalLinksMap[cleanName] || { outgoing: [], incoming: [] };
+
+                        return (
+                          <div key={n.name} className="space-y-0.5">
+                            <button
+                              onClick={() => {
+                                setExpandedLinks(prev =>
+                                  isExpanded ? prev.filter(ln => ln !== cleanName) : [...prev, cleanName]
+                                );
+                              }}
+                              className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs hover:bg-white/5 transition-colors ${selectedNote?.name === n.name ? 'text-indigo-300 font-semibold' : 'text-gray-300'}`}
+                            >
+                              <span className="text-[10px] text-gray-500">{isExpanded ? '▼' : '▶'}</span>
+                              <FileText className="h-3 w-3 shrink-0" />
+                              <span className="truncate">{cleanName}</span>
+                            </button>
+                            {isExpanded && (
+                              <div className="pl-4 border-l border-white/5 ml-2.5 space-y-2 py-1">
+                                {/* 発リンク */}
+                                <div className="space-y-0.5">
+                                  <div className="text-[10px] font-bold text-gray-500 px-2 uppercase">発リンク</div>
+                                  {relations.outgoing.length === 0 ? (
+                                    <div className="text-[10px] text-gray-600 px-2 italic">なし</div>
+                                  ) : (
+                                    relations.outgoing.map(dest => {
+                                      const destNote = notes.find(note => note.name.replace(/\.md$/i, '').toLowerCase() === dest.toLowerCase());
+                                      return (
+                                        <button
+                                          key={dest}
+                                          onClick={() => {
+                                            if (destNote) {
+                                              openNote(destNote);
+                                            } else {
+                                              createWikiNote(dest);
+                                            }
+                                          }}
+                                          className={`flex w-full items-center gap-1 rounded px-2 py-0.5 text-left text-[11px] hover:bg-white/5 transition-colors ${
+                                            destNote
+                                              ? 'text-indigo-300/80 hover:text-indigo-300'
+                                              : 'text-red-400/60 hover:text-red-400 font-medium'
+                                          }`}
+                                          title={destNote ? undefined : 'クリックして新規ノートを作成'}
+                                        >
+                                          [[{dest}]]
+                                        </button>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                                {/* 被リンク */}
+                                <div className="space-y-0.5">
+                                  <div className="text-[10px] font-bold text-gray-500 px-2 uppercase">被リンク</div>
+                                  {relations.incoming.length === 0 ? (
+                                    <div className="text-[10px] text-gray-600 px-2 italic">なし</div>
+                                  ) : (
+                                    relations.incoming.map(src => {
+                                      const srcNote = notes.find(note => note.name.replace(/\.md$/i, '').toLowerCase() === src.toLowerCase());
+                                      return (
+                                        <button
+                                          key={src}
+                                          onClick={() => srcNote && openNote(srcNote)}
+                                          className="flex w-full items-center gap-1 rounded px-2 py-0.5 text-left text-[11px] text-indigo-300/80 hover:text-indigo-300 hover:bg-white/5 transition-colors"
+                                        >
+                                          [[{src}]]
+                                        </button>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-            {isLoading ? (
-              <div className="p-4 text-sm text-gray-400">読み込み中...</div>
-            ) : (
-              filteredNotes.map((note) => (
+          ) : (
+            <>
+              <div className="space-y-2 p-3">
                 <button
-                  key={note.name}
-                  className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${selectedNote?.name === note.name ? 'bg-indigo-500/20 text-indigo-100' : 'text-gray-300'
-                    }`}
-                  onClick={() => openNote(note)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      note,
-                    });
-                  }}
+                  className="flex w-full items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-2 font-semibold hover:bg-indigo-500 transition-colors text-sm"
+                  onClick={() => { setIsAiNoteMode(true); setShowNewNoteModal(true); }}
                 >
-                  <FileText className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+                  <Plus className="h-4 w-4" />
+                  AIノート作成
                 </button>
-              ))
-            )}
-          </div>
+                <button
+                  className="flex w-full items-center justify-center gap-2 rounded bg-gray-800 border border-white/10 px-3 py-2 font-semibold hover:bg-gray-700 transition-colors text-sm"
+                  onClick={() => { setIsAiNoteMode(false); setShowNewNoteModal(true); }}
+                >
+                  <Plus className="h-4 w-4" />
+                  新規ノート作成
+                </button>
+                <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
+                  <Search className="h-4 w-4 text-gray-500" />
+                  <input
+                    className="w-full bg-transparent text-sm outline-none"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="検索"
+                  />
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+                {isLoading ? (
+                  <div className="p-4 text-sm text-gray-400">読み込み中...</div>
+                ) : (
+                  filteredNotes.map((note) => (
+                    <button
+                      key={note.name}
+                      className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${selectedNote?.name === note.name ? 'bg-indigo-500/20 text-indigo-100' : 'text-gray-300'
+                        }`}
+                      onClick={() => openNote(note)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setContextMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          note,
+                        });
+                      }}
+                    >
+                      <FileText className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </aside>
 
         {/* エディタ領域 */}
@@ -662,6 +1066,67 @@ export default function App() {
             </div>
           </div>
 
+          {/* ノート情報ヘッダー (日付とタグ) */}
+          {selectedNote && (
+            <div className="border-b border-white/5 bg-[#090d19]/30 px-6 py-3">
+              {/* 日付の表示 */}
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span className="font-semibold text-gray-500">作成日付:</span>
+                {(() => {
+                  const match = content.match(/作成日時\s*[:：]\s*([^\n\r]+)/);
+                  if (match) {
+                    return match[1].trim();
+                  }
+                  return new Date(selectedNote.updatedAt).toLocaleString();
+                })()}
+              </div>
+
+              {/* タグ表示 & 追加UI (日付の下) */}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {(selectedNote.tags || []).map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300 border border-emerald-500/20"
+                  >
+                    #{tag}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      className="ml-0.5 text-emerald-400/60 hover:text-red-400 transition-colors"
+                      title="タグを削除"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                
+                {/* タグ追加フォーム */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleAddTag(newTagInput);
+                  }}
+                  className="flex items-center"
+                >
+                  <input
+                    type="text"
+                    value={newTagInput}
+                    onChange={(e) => setNewTagInput(e.target.value)}
+                    placeholder="タグを追加"
+                    className="h-6 w-24 rounded border border-white/10 bg-black/20 px-2 text-xs text-gray-200 outline-none focus:border-indigo-500/50 transition-colors"
+                  />
+                  <button
+                    type="submit"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded bg-indigo-600/30 text-indigo-300 hover:bg-indigo-600/50 transition-colors"
+                    title="追加"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
           {/* エディタ本体 */}
           <div className="min-h-0 flex-1 overflow-hidden">
             {selectedNote ? (
@@ -695,16 +1160,49 @@ export default function App() {
                 </div>
               )}
 
+              {/* プロンプト追加確認UI */}
+              {pendingPrompt && (
+                <div className="mb-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-3.5 text-sm">
+                  <div className="font-semibold text-indigo-300">✨ 新しいカスタムプロンプトを追加しますか？</div>
+                  <div className="mt-1 text-xs text-gray-300">名前: {pendingPrompt.name}</div>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await scanAndRegisterPrompts('', [pendingPrompt]);
+                        setPendingPrompt(null);
+                      }}
+                      className="rounded bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-500 transition-colors"
+                    >
+                      はい (追加する)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingPrompt(null)}
+                      className="rounded bg-gray-800 border border-white/10 px-3 py-1 text-xs font-semibold text-gray-300 hover:bg-gray-700 transition-colors"
+                    >
+                      いいえ (チャットで調整する)
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* 設定ドロップダウン（入力欄の上） */}
               <div className="mb-3 flex items-center gap-2">
                 <select
                   className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
                   value={chatMode}
-                  onChange={(e) => setChatMode(e.target.value as ChatMode)}
+                  onChange={(e) => setChatMode(e.target.value)}
                 >
                   <option value="deep-think">思考整理</option>
                   <option value="markdown-struct">ノート作成</option>
                   <option value="long-explain">長文詳細説明</option>
+                  <option value="prompt-gen">プロンプト作成</option>
+                  {(config.customPrompts || []).map((cp) => (
+                    <option key={cp.id} value={cp.id}>
+                      {cp.name}
+                    </option>
+                  ))}
                 </select>
                 <select
                   className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
@@ -815,6 +1313,65 @@ export default function App() {
               />
               自動同期を有効にする
             </label>
+
+            {/* カスタムプロンプトセクション */}
+            <div className="mb-5 border-t border-white/10 pt-4">
+              <h3 className="mb-3 text-sm font-semibold text-gray-200">■ カスタムプロンプト</h3>
+              
+              {/* 登録済みリスト */}
+              <div className="mb-4 max-h-36 overflow-y-auto rounded border border-white/10 bg-black/25 p-2 text-xs">
+                {(config.customPrompts || []).length === 0 ? (
+                  <div className="py-2 text-center text-gray-500">登録されたカスタムプロンプトはありません</div>
+                ) : (
+                  (config.customPrompts || []).map((cp) => (
+                    <div key={cp.id} className="flex items-center justify-between border-b border-white/5 py-1.5 last:border-0">
+                      <div className="min-w-0 flex-1 pr-2">
+                        <div className="font-semibold text-gray-200 truncate">{cp.name}</div>
+                        <div className="text-gray-400 truncate mt-0.5">{cp.prompt}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCustomPrompt(cp.id)}
+                        className="rounded bg-red-500/20 px-2 py-1 text-[10px] font-semibold text-red-300 hover:bg-red-500/30 transition-colors shrink-0"
+                      >
+                        削除
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* 手動追加フォーム */}
+              <div className="space-y-3 rounded border border-white/5 bg-white/5 p-3">
+                <div className="text-xs font-semibold text-indigo-300">新規追加 (手動)</div>
+                <label className="block text-xs">
+                  <span className="mb-1 block text-gray-400">プロンプト名</span>
+                  <input
+                    className="w-full rounded bg-black/30 px-3 py-1.5 outline-none text-gray-200"
+                    placeholder="例: 翻訳アシスタント"
+                    value={newPromptName}
+                    onChange={(e) => setNewPromptName(e.target.value)}
+                  />
+                </label>
+                <label className="block text-xs">
+                  <span className="mb-1 block text-gray-400">指示 (システムプロンプト)</span>
+                  <textarea
+                    className="w-full h-16 rounded bg-black/30 px-3 py-1.5 outline-none text-gray-200 resize-none"
+                    placeholder="AIに対する具体的な指示テキスト..."
+                    value={newPromptText}
+                    onChange={(e) => setNewPromptText(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => handleAddCustomPrompt(newPromptName, newPromptText)}
+                  className="w-full rounded bg-indigo-600/30 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-600/50 transition-colors"
+                >
+                  プロンプトを追加
+                </button>
+              </div>
+            </div>
+
             <button className="w-full rounded bg-indigo-500 px-4 py-2 font-semibold hover:bg-indigo-400">保存</button>
           </form>
         </div>
@@ -847,11 +1404,17 @@ export default function App() {
                   <select
                     className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
                     value={chatMode}
-                    onChange={(e) => setChatMode(e.target.value as ChatMode)}
+                    onChange={(e) => setChatMode(e.target.value)}
                   >
                     <option value="deep-think">思考整理</option>
                     <option value="markdown-struct">ノート作成</option>
                     <option value="long-explain">長文詳細説明</option>
+                    <option value="prompt-gen">プロンプト作成</option>
+                    {(config.customPrompts || []).map((cp) => (
+                      <option key={cp.id} value={cp.id}>
+                        {cp.name}
+                      </option>
+                    ))}
                   </select>
                   <select
                     className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
