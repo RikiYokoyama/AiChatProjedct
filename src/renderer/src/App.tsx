@@ -261,9 +261,9 @@ export default function App() {
   const preprocessWikiLinks = (text: string) => {
     if (!text) return '';
     // [[実際のノート名|表示名]] のパターン
-    let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '[$2](wiki://$1)');
+    let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '[$2](#wiki-$1)');
     // [[キーワード]] のパターン
-    processed = processed.replace(/\[\[([^\]]+)\]\]/g, '[$1](wiki://$1)');
+    processed = processed.replace(/\[\[([^\]]+)\]\]/g, '[$1](#wiki-$1)');
     return processed;
   };
 
@@ -1283,11 +1283,11 @@ export default function App() {
                     components={{
                       a: (props) => {
                         const { href, children } = props;
-                        if (href && href.startsWith('wiki://')) {
-                          const noteName = decodeURIComponent(href.replace('wiki://', ''));
+                        if (href && href.startsWith('#wiki-')) {
+                          const noteName = decodeURIComponent(href.replace('#wiki-', ''));
                           return (
                             <span
-                              className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                              className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -1336,11 +1336,11 @@ export default function App() {
                     components={{
                       a: (props) => {
                         const { href, children } = props;
-                        if (href && href.startsWith('wiki://')) {
-                          const noteName = decodeURIComponent(href.replace('wiki://', ''));
+                        if (href && href.startsWith('#wiki-')) {
+                          const noteName = decodeURIComponent(href.replace('#wiki-', ''));
                           return (
                             <span
-                              className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                              className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
