@@ -258,6 +258,61 @@ export default function App() {
     setPreviewContextMenu(null);
   };
 
+  const preprocessWikiLinks = (text: string) => {
+    if (!text) return '';
+    // [[実際のノート名|表示名]] のパターン
+    let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '[$2](wiki://$1)');
+    // [[キーワード]] のパターン
+    processed = processed.replace(/\[\[([^\]]+)\]\]/g, '[$1](wiki://$1)');
+    return processed;
+  };
+
+  const createNewWikiNote = async (noteName: string) => {
+    let filename = noteName;
+    if (!filename.endsWith('.md')) {
+      filename += '.md';
+    }
+    filename = cleanFilename(filename);
+
+    if (notes.some((n) => n.name.toLowerCase() === filename.toLowerCase())) {
+      alert(`ノート "${noteName}" は既に存在します。`);
+      return;
+    }
+
+    const title = filename.replace(/\.md$/i, '');
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
+
+    const result = await window.electronAPI.saveNote({ filename, content: initial });
+    if (!result.success) {
+      alert(result.error ?? 'ノートを作成できませんでした');
+      return;
+    }
+
+    await loadNotesList();
+    const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: initial };
+    await openNote(note);
+    setEditMode('edit');
+  };
+
+  const handleWikiLinkClick = async (noteName: string) => {
+    let targetFilename = noteName;
+    if (!targetFilename.endsWith('.md')) {
+      targetFilename += '.md';
+    }
+
+    const targetNote = notes.find((n) => n.name.toLowerCase() === targetFilename.toLowerCase());
+    if (targetNote) {
+      openNote(targetNote);
+    } else {
+      const confirmCreate = window.confirm(`ノート "${noteName}" は存在しません。新しく作成しますか？`);
+      if (confirmCreate) {
+        await createNewWikiNote(noteName);
+      }
+    }
+  };
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   const filteredNotes = useMemo(() => {
@@ -1223,7 +1278,31 @@ export default function App() {
                   className="markdown-preview h-full overflow-y-auto p-6"
                   onContextMenu={handlePreviewContextMenu}
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ href, children, ...props }) => {
+                        if (href && href.startsWith('wiki://')) {
+                          const noteName = decodeURIComponent(href.replace('wiki://', ''));
+                          return (
+                            <span
+                              className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                              onClick={() => handleWikiLinkClick(noteName)}
+                            >
+                              {children}
+                            </span>
+                          );
+                        }
+                        return (
+                          <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props}>
+                            {children}
+                          </a>
+                        );
+                      }
+                    }}
+                  >
+                    {preprocessWikiLinks(content)}
+                  </ReactMarkdown>
                 </div>
               )
             ) : (
@@ -1240,7 +1319,31 @@ export default function App() {
               {streamedText && (
                 <div className="mb-3 rounded bg-white/5 p-3 border border-white/10 text-sm max-h-[120px] overflow-y-auto">
                   <div className="text-xs text-indigo-400 font-semibold mb-1">AI回答中...</div>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamedText}</ReactMarkdown>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ href, children, ...props }) => {
+                        if (href && href.startsWith('wiki://')) {
+                          const noteName = decodeURIComponent(href.replace('wiki://', ''));
+                          return (
+                            <span
+                              className="text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                              onClick={() => handleWikiLinkClick(noteName)}
+                            >
+                              {children}
+                            </span>
+                          );
+                        }
+                        return (
+                          <a href={href} className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props}>
+                            {children}
+                          </a>
+                        );
+                      }
+                    }}
+                  >
+                    {preprocessWikiLinks(streamedText)}
+                  </ReactMarkdown>
                 </div>
               )}
 
