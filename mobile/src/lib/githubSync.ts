@@ -138,9 +138,19 @@ export class GitHubSync {
     return `archive/${year}-${month}/${name}`;
   }
 
+  private async fetchDefaultBranch(): Promise<string> {
+    const res = await fetch(`${API}/repos/${this.repo}`, { headers: this.headers() });
+    if (!res.ok) throw new Error(`リポジトリ情報の取得に失敗しました (${res.status}): トークンとリポジトリURLを確認してください。`);
+    const data = await res.json();
+    return data.default_branch ?? 'main';
+  }
+
   async sync(): Promise<SyncResult> {
     if (!this.token || !this.repo) {
       throw new Error('GitリモートURLが正しく設定されていません。形式: https://TOKEN@github.com/owner/repo.git');
+    }
+    if (!this.branch) {
+      this.branch = await this.fetchDefaultBranch();
     }
 
     const result: SyncResult = { pushed: [], pulled: [], conflicts: [] };
@@ -233,8 +243,8 @@ export class GitHubSync {
 function parseRemoteUrl(url: string): { token: string; repo: string; branch: string } {
   // https://TOKEN@github.com/owner/repo.git
   const m = url.match(/https:\/\/([^@]+)@github\.com\/([^/]+\/[^/.]+)(?:\.git)?/);
-  if (!m) return { token: '', repo: '', branch: 'main' };
-  return { token: m[1], repo: m[2], branch: 'main' };
+  if (!m) return { token: '', repo: '', branch: '' };
+  return { token: m[1], repo: m[2], branch: '' };
 }
 
 export async function syncNotes(gitRemoteUrl: string): Promise<SyncResult> {
