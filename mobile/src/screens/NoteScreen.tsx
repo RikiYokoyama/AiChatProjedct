@@ -15,6 +15,9 @@ export default function NoteScreen({
   onSelectNote,
   onSend,
   onWikiLinkClick,
+  pendingPrompt,
+  onAddPrompt,
+  onDismissPrompt,
   chatMode,
   chatModes,
   onChangeChatMode,
@@ -28,6 +31,9 @@ export default function NoteScreen({
   onSelectNote: (note: Note) => void;
   onSend: (text: string) => void;
   onWikiLinkClick: (name: string) => void;
+  pendingPrompt: { name: string; instruction: string } | null;
+  onAddPrompt: () => void;
+  onDismissPrompt: () => void;
   chatMode: string;
   chatModes: { id: string; label: string }[];
   onChangeChatMode: (mode: string) => void;
@@ -153,6 +159,21 @@ export default function NoteScreen({
 
       {/* ── AIチャット入力欄 ── */}
       <div className="shrink-0 border-t border-white/10 bg-[#0b1020] px-2 pb-2 pt-1.5">
+        {/* プロンプト追加確認バナー（PC側と同仕様） */}
+        {pendingPrompt && (
+          <div className="mb-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-2.5">
+            <p className="text-xs font-semibold text-indigo-300">✨ 新しいカスタムプロンプトを追加しますか？</p>
+            <p className="mt-0.5 text-[11px] text-gray-400">名前: {pendingPrompt.name}</p>
+            <div className="mt-2 flex gap-2">
+              <button onClick={onAddPrompt} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white active:bg-indigo-500">
+                はい (追加する)
+              </button>
+              <button onClick={onDismissPrompt} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-300 active:bg-white/10">
+                いいえ (チャットで調整する)
+              </button>
+            </div>
+          </div>
+        )}
         {/* モードピッカー（展開時） */}
         {showModePicker && (
           <div className="mb-2 flex flex-wrap gap-1.5">

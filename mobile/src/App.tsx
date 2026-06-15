@@ -538,45 +538,9 @@ export default function App() {
     setPromptLogFilename(null);
   }
 
-  // 「いいえ・修正する」専用送信 — handleAutoSave を呼ばず prompt-gen モード固定
-  async function rejectChat() {
-    if (!config.geminiApiKey) return;
+  // 「いいえ・チャットで調整する」— バナーを閉じるだけ（PC側と同じ仕様）
+  function dismissPendingPrompt() {
     setPendingPrompt(null);
-    const client = new GeminiClient(config.geminiApiKey);
-    const rejectMsg = 'いいえ、修正してください。別のパターンで再度作成してください。';
-    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: rejectMsg }];
-    setChatHistory(nextHistory);
-    setStreamedText('');
-    setIsGenerating(true);
-    const currentLogFile = promptLogFilename;
-
-    await client.chatStream(
-      nextHistory,
-      getSystemPrompt('prompt-gen'),
-      aiModelMode,
-      null,
-      (chunk) => setStreamedText((prev) => prev + chunk),
-      async (fullText) => {
-        const updatedHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
-        setChatHistory(updatedHistory);
-        setStreamedText('');
-        setIsGenerating(false);
-        // 同じMDファイルに会話を追記
-        const firstUserMsg = updatedHistory.find((m) => m.role === 'user')?.content ?? 'プロンプト作成';
-        const logFile = await savePromptLog(updatedHistory, firstUserMsg.slice(0, 20), currentLogFile);
-        if (!currentLogFile) setPromptLogFilename(logFile);
-        // [PROMPT] ブロックを再検出（フォールバックあり）
-        const parsed = parseGeneratedPrompt(fullText);
-        setPendingPrompt(parsed ?? {
-          name: 'カスタム',
-          instruction: fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim(),
-        });
-      },
-      (err) => {
-        setIsGenerating(false);
-        alert(err instanceof Error ? err.message : String(err));
-      },
-    );
   }
 
   async function sendChat(prompt: string) {
@@ -707,6 +671,9 @@ export default function App() {
               chatMode={chatMode}
               chatModes={chatModes}
               onChangeChatMode={setChatMode}
+              pendingPrompt={pendingPrompt}
+              onAddPrompt={addPendingPrompt}
+              onDismissPrompt={dismissPendingPrompt}
             />
           ) : (
             <FilesScreen
@@ -751,6 +718,9 @@ export default function App() {
             onSelectNote={selectNoteForNoteTab}
             onSend={sendChat}
             onWikiLinkClick={handleWikiLinkClick}
+            pendingPrompt={pendingPrompt}
+            onAddPrompt={addPendingPrompt}
+            onDismissPrompt={dismissPendingPrompt}
             chatMode={chatMode}
             chatModes={chatModes}
             onChangeChatMode={setChatMode}
