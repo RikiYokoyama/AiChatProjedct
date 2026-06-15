@@ -68,7 +68,7 @@ function getFilesRecursively(dir, filterExt = '.md') {
   return results;
 }
 
-// コミット前にルートのマークダウンを archive/ に仕分ける
+// コミット前にルートの .md を archive/YYYY-MM/ へ移動
 function packMarkdownFiles(notesPath) {
   const files = fs.readdirSync(notesPath, { withFileTypes: true });
   const mdFiles = files.filter(f => f.isFile() && f.name.endsWith('.md'));
@@ -78,68 +78,49 @@ function packMarkdownFiles(notesPath) {
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const archiveDir = path.join(notesPath, 'archive', `${year}-${month}`);
-  
+
   if (!fs.existsSync(archiveDir)) {
     fs.mkdirSync(archiveDir, { recursive: true });
   }
 
   for (const file of mdFiles) {
     const srcPath = path.join(notesPath, file.name);
-    let destPath = path.join(archiveDir, file.name);
-
-    if (fs.existsSync(destPath)) {
-      const ext = path.extname(file.name);
-      const name = path.basename(file.name, ext);
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      const timestamp = `${hours}${minutes}${seconds}`;
-      destPath = path.join(archiveDir, `${name}_${timestamp}${ext}`);
-    }
-
+    const destPath = path.join(archiveDir, file.name);
+    // 同名がすでにあれば中身を比較し、同じなら上書き、違えば上書き（最新優先）
     fs.renameSync(srcPath, destPath);
     console.log(`Packed: ${srcPath} -> ${destPath}`);
   }
 }
 
-// 同期後に archive/ のマークダウンをルートに引き出す (競合時は退避＆リネーム)
-function unpackMarkdownFiles(notesPath) {
-  // ① 安全対策: ルート直下の既存 .md ファイルをすべて backup/YYYYMMDD_HHMMSS/ へコピーして退避
-  const rootFiles = fs.readdirSync(notesPath, { withFileTypes: true })
-                      .filter(f => f.isFile() && f.name.endsWith('.md'));
-  const now = new Date();
-
-  if (rootFiles.length > 0) {
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const date = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    const backupDir = path.join(notesPath, 'backup', `${year}${month}${date}_${hours}${minutes}${seconds}`);
-    
-    fs.mkdirSync(backupDir, { recursive: true });
-    for (const file of rootFiles) {
-      fs.copyFileSync(path.join(notesPath, file.name), path.join(backupDir, file.name));
-    }
-    console.log(`Backed up ${rootFiles.length} files to ${backupDir}`);
+// ローカルの archive/ と backup/ を削除してルートだけに保つ
+function cleanLocalArchive(notesPath) {
+  const archiveDir = path.join(notesPath, 'archive');
+  const backupDir = path.join(notesPath, 'backup');
+  if (fs.existsSync(archiveDir)) {
+    fs.rmSync(archiveDir, { recursive: true, force: true });
+    console.log('Removed local archive/');
   }
+  if (fs.existsSync(backupDir)) {
+    fs.rmSync(backupDir, { recursive: true, force: true });
+    console.log('Removed local backup/');
+  }
+}
 
-  // ② archive/ 以下の .md をファイル名ごとに最新フォルダのものだけ展開
+// 同期後に archive/ の最新ファイルをルートに展開し、archive/ と backup/ を削除
+function unpackMarkdownFiles(notesPath) {
   const archiveRoot = path.join(notesPath, 'archive');
   if (!fs.existsSync(archiveRoot)) return;
 
   const archivedFiles = getFilesRecursively(archiveRoot, '.md');
 
   // 同名ファイルが複数ある場合、フォルダ名（YYYY-MM）が最新のものだけ残す
-  const latestMap = new Map(); // filename -> srcPath
+  const latestMap = new Map();
   for (const srcPath of archivedFiles) {
     const filename = path.basename(srcPath);
     const existing = latestMap.get(filename);
     if (!existing) {
       latestMap.set(filename, srcPath);
     } else {
-      // フォルダ名を比較して新しい方を採用
       const existingFolder = path.dirname(existing).split(path.sep).pop() ?? '';
       const currentFolder = path.dirname(srcPath).split(path.sep).pop() ?? '';
       if (currentFolder > existingFolder) {
@@ -153,6 +134,9 @@ function unpackMarkdownFiles(notesPath) {
     fs.copyFileSync(srcPath, destPath);
     console.log(`Unpacked: ${srcPath} -> ${destPath}`);
   }
+
+  // ローカルの archive/ と backup/ を削除
+  cleanLocalArchive(notesPath);
 }
 
 async function runGitSync() {
