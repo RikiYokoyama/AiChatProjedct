@@ -125,32 +125,31 @@ function unpackMarkdownFiles(notesPath) {
     console.log(`Backed up ${rootFiles.length} files to ${backupDir}`);
   }
 
-  // ② archive/ 以下のすべての .md をルート直下へコピー
+  // ② archive/ 以下の .md をファイル名ごとに最新フォルダのものだけ展開
   const archiveRoot = path.join(notesPath, 'archive');
   if (!fs.existsSync(archiveRoot)) return;
 
   const archivedFiles = getFilesRecursively(archiveRoot, '.md');
 
+  // 同名ファイルが複数ある場合、フォルダ名（YYYY-MM）が最新のものだけ残す
+  const latestMap = new Map(); // filename -> srcPath
   for (const srcPath of archivedFiles) {
     const filename = path.basename(srcPath);
-    let destPath = path.join(notesPath, filename);
-
-    if (fs.existsSync(destPath)) {
-      const srcBuf = fs.readFileSync(srcPath);
-      const destBuf = fs.readFileSync(destPath);
-      if (srcBuf.equals(destBuf)) {
-        // 中身が同一ならコピーをスキップ
-        continue;
+    const existing = latestMap.get(filename);
+    if (!existing) {
+      latestMap.set(filename, srcPath);
+    } else {
+      // フォルダ名を比較して新しい方を採用
+      const existingFolder = path.dirname(existing).split(path.sep).pop() ?? '';
+      const currentFolder = path.dirname(srcPath).split(path.sep).pop() ?? '';
+      if (currentFolder > existingFolder) {
+        latestMap.set(filename, srcPath);
       }
-      
-      // 中身が異なる場合は _conflict_分秒 を付与して保存
-      const ext = path.extname(filename);
-      const name = path.basename(filename, ext);
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      destPath = path.join(notesPath, `${name}_conflict_${minutes}${seconds}${ext}`);
     }
+  }
 
+  for (const [filename, srcPath] of latestMap) {
+    const destPath = path.join(notesPath, filename);
     fs.copyFileSync(srcPath, destPath);
     console.log(`Unpacked: ${srcPath} -> ${destPath}`);
   }
