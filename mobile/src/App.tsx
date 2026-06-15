@@ -740,7 +740,10 @@ export default function App() {
         {tab === 'settings' && (
           <SettingsScreen
             config={config}
+            gitStatus={gitStatus}
+            gitMessage={gitMessage}
             onSave={handleSaveConfig}
+            onSync={() => runSync()}
             onDeletePrompt={handleDeletePrompt}
           />
         )}

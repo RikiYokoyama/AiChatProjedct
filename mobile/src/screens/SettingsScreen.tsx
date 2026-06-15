@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { GitBranch, Loader2, Trash2 } from 'lucide-react';
 import { AppConfig, CustomPrompt } from '../lib/storage';
 
 export default function SettingsScreen({
   config,
+  gitStatus,
+  gitMessage,
   onSave,
+  onSync,
   onDeletePrompt,
 }: {
   config: AppConfig;
+  gitStatus: 'idle' | 'syncing' | 'success' | 'error';
+  gitMessage: string | null;
   onSave: (config: AppConfig) => void;
+  onSync: () => void;
   onDeletePrompt: (id: string) => void;
 }) {
   const [draft, setDraft] = useState<AppConfig>(config);
@@ -69,6 +75,24 @@ export default function SettingsScreen({
         />
         自動同期を有効にする
       </label>
+
+      {/* 手動同期ボタン */}
+      <button
+        onClick={onSync}
+        disabled={gitStatus === 'syncing'}
+        className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold active:bg-white/10 disabled:opacity-50"
+      >
+        {gitStatus === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+        今すぐ同期
+      </button>
+      {gitMessage && (
+        <textarea
+          readOnly
+          value={gitMessage}
+          rows={3}
+          className={`mb-5 w-full resize-none rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs outline-none ${gitStatus === 'error' ? 'text-red-400' : 'text-emerald-400'}`}
+        />
+      )}
 
       {/* カスタムプロンプト */}
       <div className="mb-6">
