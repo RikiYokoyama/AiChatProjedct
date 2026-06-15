@@ -419,6 +419,17 @@ export default function App() {
   // chatMode の最新値を ref に同期（非同期コールバック内の stale closure 対策）
   chatModeRef.current = chatMode;
 
+  // モード切替ハンドラ：prompt-gen に切り替えたとき会話履歴をリセット
+  function handleChangeChatMode(mode: string) {
+    if (mode === 'prompt-gen' && chatMode !== 'prompt-gen') {
+      setChatHistory([]);
+      setPromptLogFilename(null);
+      setPendingPrompt(null);
+    }
+    setChatMode(mode);
+    chatModeRef.current = mode;
+  }
+
   function getSystemPrompt(mode: string): string {
     if (mode in SYSTEM_PROMPTS) return SYSTEM_PROMPTS[mode as ChatMode];
     const custom = (config.customPrompts ?? []).find((p) => p.id === mode);
@@ -551,14 +562,9 @@ export default function App() {
     }
     setPendingPrompt(null);
     const isPromptGen = chatModeRef.current === 'prompt-gen';
-    // prompt-gen は毎回クリーンな会話で開始（他モードの履歴を混入させない）
-    const baseHistory: ChatMessage[] = isPromptGen ? [] : chatHistory;
-    if (isPromptGen) {
-      setChatHistory([]);
-      setPromptLogFilename(null);
-    }
+    // prompt-gen はノートコンテキストを渡さない（他モードの履歴はモード切替時にリセット済み）
     const client = new GeminiClient(config.geminiApiKey);
-    const nextHistory: ChatMessage[] = [...baseHistory, { role: 'user', content: prompt }];
+    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
     setChatHistory(nextHistory);
     setStreamedText('');
     setIsGenerating(true);
@@ -673,7 +679,7 @@ export default function App() {
               onSend={sendChat}
               chatMode={chatMode}
               chatModes={chatModes}
-              onChangeChatMode={setChatMode}
+              onChangeChatMode={handleChangeChatMode}
               pendingPrompt={pendingPrompt}
               onAddPrompt={addPendingPrompt}
               onDismissPrompt={dismissPendingPrompt}
@@ -726,7 +732,7 @@ export default function App() {
             onDismissPrompt={dismissPendingPrompt}
             chatMode={chatMode}
             chatModes={chatModes}
-            onChangeChatMode={setChatMode}
+            onChangeChatMode={handleChangeChatMode}
           />
         )}
 
