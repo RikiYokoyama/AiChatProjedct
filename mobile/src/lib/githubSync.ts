@@ -136,7 +136,7 @@ export class GitHubSync {
 
   async sync(): Promise<SyncResult> {
     if (!this.token || !this.repo) {
-      throw new Error('GitHubトークンとリポジトリ（owner/repo）を設定してください。');
+      throw new Error('GitリモートURLが正しく設定されていません。形式: https://TOKEN@github.com/owner/repo.git');
     }
 
     const result: SyncResult = { pushed: [], pulled: [], conflicts: [] };
