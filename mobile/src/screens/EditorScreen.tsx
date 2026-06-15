@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ArrowLeft, Brackets, Edit3, Eye, ListTree, Mic, MicOff, Network, Plus, Sparkles, Tag, X } from 'lucide-react';
+import { ArrowLeft, Brackets, ChevronDown, Edit3, Eye, ListTree, Loader2, Mic, MicOff, Network, Plus, Send, Sparkles, Tag, X } from 'lucide-react';
 import { Note, noteTitle } from '../lib/notes';
 import MarkdownView from '../components/MarkdownView';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
@@ -16,6 +16,13 @@ export default function EditorScreen({
   onRemoveTag,
   onAiAction,
   onOpenLocalGraph,
+  onSend,
+  chatMode,
+  chatModes,
+  onChangeChatMode,
+  pendingPrompt,
+  onAddPrompt,
+  onRejectPrompt,
 }: {
   note: Note;
   content: string;
@@ -27,17 +34,32 @@ export default function EditorScreen({
   onRemoveTag: (tag: string) => void;
   onAiAction: (action: 'title' | 'tags' | 'summary') => void;
   onOpenLocalGraph: () => void;
+  onSend: (text: string) => void;
+  chatMode: string;
+  chatModes: { id: string; label: string }[];
+  onChangeChatMode: (mode: string) => void;
+  pendingPrompt: { name: string; instruction: string } | null;
+  onAddPrompt: () => void;
+  onRejectPrompt: () => void;
 }) {
   const [mode, setMode] = useState<'edit' | 'preview'>('preview');
   const [newTag, setNewTag] = useState('');
   const [showTagInput, setShowTagInput] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [showModePicker, setShowModePicker] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const keyboardInset = useKeyboardInset();
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
 
+  // エディタ用音声入力
   const speech = useSpeechInput((text) => {
     insertAtCursor(text);
+  });
+
+  // チャット用音声入力
+  const chatSpeech = useSpeechInput((text) => {
+    setChatInput((prev) => prev + text);
   });
 
   function insertAtCursor(text: string) {
@@ -68,6 +90,13 @@ export default function EditorScreen({
       ta.focus();
       ta.setSelectionRange(start + 2, start + 2 + selected.length);
     });
+  }
+
+  function sendChat() {
+    const text = chatInput.trim();
+    if (!text || isGenerating) return;
+    setChatInput('');
+    onSend(text);
   }
 
   // プレビュー画面での左右スワイプによるモード切替
@@ -174,7 +203,7 @@ export default function EditorScreen({
         )}
       </div>
 
-      {/* クイックAIアクションツールバー（編集時はキーボード直上） */}
+      {/* クイックAIアクションツールバー（編集時のみ） */}
       {mode === 'edit' && (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 bg-[#0b1020] px-2 py-1.5" style={{ scrollbarWidth: 'none' }}>
           <ToolbarButton
@@ -191,6 +220,98 @@ export default function EditorScreen({
           <ToolbarButton icon={<Brackets className="h-4 w-4" />} label="[[リンク]]" onClick={wrapSelectionWithWikiLink} />
         </div>
       )}
+
+      {/* AIチャット入力欄 */}
+      <div className="shrink-0 border-t border-white/10 bg-[#0b1020] px-2 pb-2 pt-1.5">
+        {/* プロンプト追加確認バナー（チャット入力欄の上部に配置） */}
+        {pendingPrompt && (
+          <div className="mb-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-3">
+            <p className="mb-2 text-xs font-semibold text-violet-300">
+              「{pendingPrompt.name}」を追加しますか？
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={onAddPrompt}
+                className="flex-1 rounded-xl bg-violet-600 py-2 text-sm font-bold text-white active:bg-violet-500"
+              >
+                はい・追加する
+              </button>
+              <button
+                onClick={onRejectPrompt}
+                className="flex-1 rounded-xl bg-white/5 py-2 text-sm font-semibold text-gray-300 active:bg-white/10"
+              >
+                いいえ・修正する
+              </button>
+            </div>
+          </div>
+        )}
+        {/* モードピッカー（展開時） */}
+        {showModePicker && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {chatModes.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => { onChangeChatMode(m.id); setShowModePicker(false); }}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                  chatMode === m.id ? 'bg-indigo-600 text-white' : 'bg-white/5 text-gray-300 active:bg-white/10'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* 入力行 */}
+        <div className="flex items-end gap-2">
+          {/* モード選択ボタン */}
+          <button
+            onClick={() => setShowModePicker((v) => !v)}
+            className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-indigo-500/20 px-2.5 text-xs font-semibold text-indigo-300 active:bg-indigo-500/30"
+          >
+            {chatModes.find((m) => m.id === chatMode)?.label ?? chatMode}
+            <ChevronDown className={`h-3 w-3 transition-transform ${showModePicker ? 'rotate-180' : ''}`} />
+          </button>
+
+          <textarea
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            rows={1}
+            placeholder="AIに質問 or 指示..."
+            className="max-h-24 min-h-[36px] flex-1 resize-none rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none placeholder:text-gray-500 focus:border-indigo-500/50"
+            onInput={(e) => {
+              const ta = e.currentTarget;
+              ta.style.height = 'auto';
+              ta.style.height = `${Math.min(ta.scrollHeight, 96)}px`;
+            }}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendChat();
+            }}
+          />
+
+          {/* 音声入力 */}
+          <button
+            onClick={() => (chatSpeech.isListening ? chatSpeech.stop() : chatSpeech.start())}
+            disabled={!chatSpeech.supported}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+              chatSpeech.isListening ? 'bg-red-500/20 text-red-400' : 'bg-white/5 text-gray-400'
+            } disabled:opacity-30`}
+            aria-label="音声入力"
+          >
+            {chatSpeech.isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          </button>
+
+          {/* 送信 */}
+          <button
+            onClick={sendChat}
+            disabled={!chatInput.trim() || isGenerating}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white active:bg-indigo-500 disabled:opacity-40"
+            aria-label="送信"
+          >
+            {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import BottomNav, { Tab } from './components/BottomNav';
-import NotesScreen from './screens/NotesScreen';
+import FilesScreen from './screens/NotesScreen';
 import EditorScreen from './screens/EditorScreen';
-import ChatScreen from './screens/ChatScreen';
+import NoteScreen from './screens/NoteScreen';
 import GraphScreen from './screens/GraphScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import {
@@ -36,19 +36,26 @@ import {
 import { syncNotes } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
-  'deep-think': '深掘り',
-  'markdown-struct': '構造化',
-  'long-explain': '詳細解説',
+  'deep-think': '思考整理',
+  'markdown-struct': 'ノート作成',
+  'long-explain': '長文詳細解説',
   'prompt-gen': 'プロンプト作成',
 };
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('notes');
+  const [tab, setTab] = useState<Tab>('files');
   const [notes, setNotes] = useState<Note[]>([]);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
+
+  // ファイルタブ用
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [content, setContent] = useState('');
   const [showEditor, setShowEditor] = useState(false);
+
+  // ノートタブ（NoteScreen）用 — 別のファイル選択を持つ
+  const [noteTabSelectedName, setNoteTabSelectedName] = useState<string | null>(null);
+  const [noteTabContent, setNoteTabContent] = useState('');
+
   const [recentNames, setRecentNames] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [archived, setArchived] = useState<string[]>([]);
@@ -58,19 +65,29 @@ export default function App() {
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatMode, setChatMode] = useState<string>('deep-think');
-  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
+  const chatModeRef = useRef<string>('deep-think');
+  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   const [gitStatus, setGitStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [gitMessage, setGitMessage] = useState<string | null>(null);
+  const [pendingPrompt, setPendingPrompt] = useState<{ name: string; instruction: string } | null>(null);
 
   const selectedNote = useMemo(
     () => notes.find((n) => n.name === selectedName) ?? null,
     [notes, selectedName],
   );
 
+  const noteTabSelectedNote = useMemo(
+    () => notes.find((n) => n.name === noteTabSelectedName) ?? null,
+    [notes, noteTabSelectedName],
+  );
+
   const contentRef = useRef(content);
   contentRef.current = content;
+
+  const noteTabContentRef = useRef(noteTabContent);
+  noteTabContentRef.current = noteTabContent;
 
   // ---------- 初期化 ----------
   useEffect(() => {
@@ -94,7 +111,7 @@ export default function App() {
     setNotes(await listNotes());
   }, []);
 
-  // ---------- ノート操作 ----------
+  // ---------- ファイルタブのノート操作 ----------
   const openNote = useCallback(
     (note: Note) => {
       if (selectedName && selectedName !== note.name) {
@@ -109,7 +126,7 @@ export default function App() {
     [selectedName],
   );
 
-  // 自動保存（編集後1.2秒）
+  // ファイルタブ 自動保存（編集後1.2秒）
   useEffect(() => {
     if (!selectedName || !showEditor) return;
     const timer = setTimeout(async () => {
@@ -121,15 +138,36 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [content, selectedName, showEditor]);
 
-  async function createNote(useAi: boolean) {
-    const title = useAi
-      ? window.prompt('AIに書かせるテーマを入力してください')
-      : window.prompt('ノート名を入力してください', 'Untitled');
-    if (!title) return;
-    let name = cleanFilename(title);
+  // ノートタブ 自動保存
+  useEffect(() => {
+    if (!noteTabSelectedName) return;
+    const timer = setTimeout(async () => {
+      await writeNote(noteTabSelectedName, noteTabContentRef.current);
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.name === noteTabSelectedName ? buildNote(n.name, noteTabContentRef.current) : n,
+        ),
+      );
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [noteTabContent, noteTabSelectedName]);
+
+  // ノートタブでファイルを選択
+  const selectNoteForNoteTab = useCallback((note: Note) => {
+    setNoteTabSelectedName(note.name);
+    setNoteTabContent(note.content);
+    setRecentNames((prev) => [note.name, ...prev.filter((n) => n !== note.name)].slice(0, 10));
+  }, []);
+
+  // ---------- ファイル作成 ----------
+  async function createNote(title: string, useAi: boolean, aiMode?: string) {
+    const firstLine = title.split('\n')[0].trim();
+    if (!firstLine) return;
+
+    let name = cleanFilename(firstLine);
     let counter = 1;
     while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
-      name = cleanFilename(`${title} (${counter++})`);
+      name = cleanFilename(`${firstLine} (${counter++})`);
     }
     const initial = initialNoteContent(noteTitle(name));
     await writeNote(name, initial);
@@ -140,10 +178,16 @@ export default function App() {
       setIsGenerating(true);
       let acc = initial;
       const client = new GeminiClient(config.geminiApiKey);
+      const modeToUse = (aiMode ?? 'long-explain') as ChatMode;
+      const systemPrompt = SYSTEM_PROMPTS[modeToUse] ?? SYSTEM_PROMPTS['long-explain'];
       await client.chatStream(
-        [{ role: 'user', content: `「${noteTitle(name)}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。` }],
-        SYSTEM_PROMPTS['long-explain'],
-        'fast',
+        [
+          {
+            role: 'user',
+            content: `「${noteTitle(name)}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。`,
+          },
+        ],
+        systemPrompt,
         aiModelMode,
         null,
         (chunk) => {
@@ -165,6 +209,22 @@ export default function App() {
     }
   }
 
+  // メモ作成（タイトルだけのシンプルノート）
+  async function createMemo(title: string) {
+    const clean = title.trim();
+    if (!clean) return;
+    let name = cleanFilename(clean);
+    let counter = 1;
+    while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+      name = cleanFilename(`${clean} (${counter++})`);
+    }
+    const now = new Date().toLocaleString('ja-JP');
+    const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
+    await writeNote(name, initial);
+    await refreshNotes();
+    openNote(buildNote(name, initial));
+  }
+
   async function deleteNoteAction(note: Note) {
     if (!window.confirm(`「${noteTitle(note.name)}」を削除しますか？`)) return;
     await removeNote(note.name);
@@ -172,6 +232,10 @@ export default function App() {
       setSelectedName(null);
       setContent('');
       setShowEditor(false);
+    }
+    if (noteTabSelectedName === note.name) {
+      setNoteTabSelectedName(null);
+      setNoteTabContent('');
     }
     setRecentNames((prev) => prev.filter((n) => n !== note.name));
     await refreshNotes();
@@ -199,7 +263,7 @@ export default function App() {
         await navigator.share({ title: noteTitle(note.name), text: note.content });
       } else {
         await navigator.clipboard.writeText(note.content);
-        alert('ノート内容をクリップボードにコピーしました');
+        alert('ファイル内容をクリップボードにコピーしました');
       }
     } catch {
       // ユーザーキャンセルは無視
@@ -213,30 +277,30 @@ export default function App() {
       const target = notes.find((n) => n.name.toLowerCase() === filename.toLowerCase());
       if (target) {
         openNote(target);
-        setTab('notes');
+        setTab('files');
         return;
       }
-      if (!window.confirm(`ノート「${name}」は存在しません。新しく作成しますか？`)) return;
+      if (!window.confirm(`ファイル「${name}」は存在しません。新しく作成しますか？`)) return;
       const clean = cleanFilename(name);
       const initial = initialNoteContent(noteTitle(clean));
       await writeNote(clean, initial);
       await refreshNotes();
       openNote(buildNote(clean, initial));
-      setTab('notes');
+      setTab('files');
     },
     [notes, openNote, refreshNotes],
   );
 
   // ---------- タグ ----------
-  async function updateTags(nextTags: string[]) {
-    if (!selectedName) return;
-    const nextContent = applyTagsToContent(contentRef.current, nextTags);
-    setContent(nextContent);
-    await writeNote(selectedName, nextContent);
+  async function updateTags(name: string, currentContent: string, nextTags: string[]) {
+    const nextContent = applyTagsToContent(currentContent, nextTags);
+    if (name === selectedName) setContent(nextContent);
+    if (name === noteTabSelectedName) setNoteTabContent(nextContent);
+    await writeNote(name, nextContent);
     await refreshNotes();
   }
 
-  // ---------- クイックAIアクション ----------
+  // ---------- クイックAIアクション (EditorScreen用) ----------
   async function handleAiAction(action: 'title' | 'tags' | 'summary') {
     if (!config.geminiApiKey) {
       alert('設定画面でGemini APIキーを入力してください');
@@ -249,18 +313,18 @@ export default function App() {
       setAutoSaveStatus('saving');
       const tags = await generateNoteTags(config.geminiApiKey, body.slice(0, 600), '');
       const current = selectedNote?.tags ?? [];
-      await updateTags(Array.from(new Set([...current, ...tags])));
+      await updateTags(selectedName, body, Array.from(new Set([...current, ...tags])));
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 1500);
       return;
     }
 
     if (action === 'title') {
-      const title = await generateNoteTitle(config.geminiApiKey, body.slice(0, 600), '');
-      if (!title) return;
-      const newName = cleanFilename(title);
+      const newTitle = await generateNoteTitle(config.geminiApiKey, body.slice(0, 600), '');
+      if (!newTitle) return;
+      const newName = cleanFilename(newTitle);
       if (notes.some((n) => n.name.toLowerCase() === newName.toLowerCase())) {
-        alert(`「${title}」というノートは既に存在します`);
+        alert(`「${newTitle}」というファイルは既に存在します`);
         return;
       }
       await writeNote(newName, body);
@@ -271,15 +335,19 @@ export default function App() {
       return;
     }
 
-    // 要約: 本文末尾に要約セクションを追記
+    // 要約
     setIsGenerating(true);
     const client = new GeminiClient(config.geminiApiKey);
     let acc = body + '\n\n## 要約\n\n';
     setContent(acc);
     await client.chatStream(
-      [{ role: 'user', content: `以下のノートを3〜5行で簡潔に要約してください。要約本文のみを出力してください。\n\n${body.slice(0, 8000)}` }],
+      [
+        {
+          role: 'user',
+          content: `以下のノートを3〜5行で簡潔に要約してください。要約本文のみを出力してください。\n\n${body.slice(0, 8000)}`,
+        },
+      ],
       SYSTEM_PROMPTS['markdown-struct'],
-      'fast',
       aiModelMode,
       null,
       (chunk) => {
@@ -298,7 +366,7 @@ export default function App() {
     );
   }
 
-  // ---------- AIチャット ----------
+  // ---------- AIチャット (NoteScreen / 共通) ----------
   const chatModes = useMemo(
     () => [
       ...Object.entries(CHAT_MODE_LABELS).map(([id, label]) => ({ id, label })),
@@ -307,32 +375,42 @@ export default function App() {
     [config.customPrompts],
   );
 
+  // chatMode の最新値を ref に同期（非同期コールバック内の stale closure 対策）
+  chatModeRef.current = chatMode;
+
   function getSystemPrompt(mode: string): string {
     if (mode in SYSTEM_PROMPTS) return SYSTEM_PROMPTS[mode as ChatMode];
     const custom = (config.customPrompts ?? []).find((p) => p.id === mode);
     return custom ? custom.prompt : SYSTEM_PROMPTS['deep-think'];
   }
 
-  async function handleAutoSave(userPrompt: string, aiReply: string) {
+  async function handleAutoSave(userPrompt: string, aiReply: string, contextName: string | null) {
     const block = `---\n\n## User\n\n${userPrompt.trim()}\n\n## AI\n\n${aiReply.trim()}`;
     setAutoSaveStatus('saving');
     try {
       const extracted = await generateNoteTags(config.geminiApiKey, userPrompt, aiReply);
-      if (selectedName) {
-        const current = notes.find((n) => n.name === selectedName);
-        const base = contentRef.current || current?.content || '';
-        const currentTags = current?.tags ?? [];
+
+      // 対象ファイルが開かれている場合はそこに追記
+      const targetName = contextName;
+      if (targetName) {
+        const base = targetName === selectedName ? contentRef.current
+                   : targetName === noteTabSelectedName ? noteTabContentRef.current
+                   : notes.find((n) => n.name === targetName)?.content ?? '';
+        const currentNote = notes.find((n) => n.name === targetName);
+        const currentTags = currentNote?.tags ?? [];
         const nextTags = Array.from(new Set([...currentTags, ...extracted]));
         const appended = applyTagsToContent(`${base.trimEnd()}\n\n${block}\n`, nextTags);
-        setContent(appended);
-        await writeNote(selectedName, appended);
+        if (targetName === selectedName) setContent(appended);
+        if (targetName === noteTabSelectedName) setNoteTabContent(appended);
+        await writeNote(targetName, appended);
       } else {
+        // ファイルを新規作成
         const title = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
         const filename = cleanFilename(title);
         const full = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${extracted.join(', ')}\n\n${block}\n`;
         await writeNote(filename, full);
-        setSelectedName(filename);
-        setContent(full);
+        setNoteTabSelectedName(filename);
+        setNoteTabContent(full);
         setRecentNames((prev) => [filename, ...prev.filter((n) => n !== filename)].slice(0, 10));
       }
       await refreshNotes();
@@ -344,29 +422,113 @@ export default function App() {
     }
   }
 
+  // [PROMPT]...[/PROMPT] ブロックをパース（表記ゆれに対応）
+  function parseGeneratedPrompt(text: string): { name: string; instruction: string } | null {
+    // バッククォートや余分な記号を取り除いてからマッチ
+    const cleaned = text.replace(/```/g, '').replace(/\*\*/g, '');
+    const match = cleaned.match(/\[PROMPT\]([\s\S]*?)\[\/PROMPT\]/i);
+    if (!match) return null;
+    const block = match[1];
+    const nameMatch = block.match(/名前[:：]\s*(.+)/);
+    const instrMatch = block.match(/指示[:：]\s*([\s\S]+)/);
+    if (!nameMatch || !instrMatch) return null;
+    const name = nameMatch[1].trim().slice(0, 10);
+    const instruction = instrMatch[1].replace(/\[\/PROMPT\].*/i, '').trim();
+    if (!name || !instruction) return null;
+    return { name, instruction };
+  }
+
+  // プロンプト作成モードで「はい」を選択したとき
+  async function addPendingPrompt() {
+    if (!pendingPrompt) return;
+    const id = `custom-${Date.now()}`;
+    const next = {
+      ...config,
+      customPrompts: [
+        ...(config.customPrompts ?? []),
+        { id, name: pendingPrompt.name, prompt: pendingPrompt.instruction },
+      ],
+    };
+    setConfig(next);
+    await saveConfig(next);
+    setPendingPrompt(null);
+  }
+
+  // 「いいえ・修正する」専用送信 — handleAutoSave を呼ばず prompt-gen モード固定
+  async function rejectChat() {
+    if (!config.geminiApiKey) return;
+    setPendingPrompt(null);
+    const client = new GeminiClient(config.geminiApiKey);
+    const prompt = 'いいえ、修正してください。別のパターンで再度作成してください。';
+    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
+    setChatHistory(nextHistory);
+    setStreamedText('');
+    setIsGenerating(true);
+
+    await client.chatStream(
+      nextHistory,
+      getSystemPrompt('prompt-gen'), // 常に prompt-gen プロンプトで固定
+      aiModelMode,
+      null, // ノートコンテキストなし（混在防止）
+      (chunk) => setStreamedText((prev) => prev + chunk),
+      (fullText) => {
+        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+        setStreamedText('');
+        setIsGenerating(false);
+        // [PROMPT] ブロックを再検出（フォールバックあり）
+        const parsed = parseGeneratedPrompt(fullText);
+        setPendingPrompt(parsed ?? {
+          name: 'カスタム',
+          instruction: fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim(),
+        });
+      },
+      (err) => {
+        setIsGenerating(false);
+        alert(err instanceof Error ? err.message : String(err));
+      },
+    );
+  }
+
   async function sendChat(prompt: string) {
     if (!config.geminiApiKey) {
       alert('設定画面でGemini APIキーを入力してください');
       setTab('settings');
       return;
     }
+    setPendingPrompt(null);
     const client = new GeminiClient(config.geminiApiKey);
     const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
     setChatHistory(nextHistory);
     setStreamedText('');
     setIsGenerating(true);
+
+    const contextName = noteTabSelectedName;
+    const contextContent = noteTabSelectedName ? noteTabContentRef.current : null;
+
     await client.chatStream(
       nextHistory,
       getSystemPrompt(chatMode),
-      'fast',
       aiModelMode,
-      selectedNote ? contentRef.current || selectedNote.content : null,
+      contextContent,
       (chunk) => setStreamedText((prev) => prev + chunk),
       (fullText) => {
         setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
         setStreamedText('');
         setIsGenerating(false);
-        handleAutoSave(prompt, fullText);
+        const currentMode = chatModeRef.current;
+        // prompt-gen 以外のみ自動保存（prompt-gen はノートに追記不要）
+        if (currentMode !== 'prompt-gen') {
+          handleAutoSave(prompt, fullText, contextName);
+        }
+        // prompt-gen モードなら [PROMPT] ブロックを検出して確認待ちに
+        if (currentMode === 'prompt-gen') {
+          const parsed = parseGeneratedPrompt(fullText);
+          // パースできなくてもフォールバック：テキスト全体をinstructionとして仮設定
+          setPendingPrompt(parsed ?? {
+            name: 'カスタム',
+            instruction: fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim(),
+          });
+        }
       },
       (err) => {
         setIsGenerating(false);
@@ -386,7 +548,7 @@ export default function App() {
       const parts = [];
       if (result.pushed.length) parts.push(`送信 ${result.pushed.length}件`);
       if (result.pulled.length) parts.push(`受信 ${result.pulled.length}件`);
-      if (result.conflicts.length) parts.push(`競合 ${result.conflicts.length}件（conflictノートとして保存）`);
+      if (result.conflicts.length) parts.push(`競合 ${result.conflicts.length}件`);
       setGitMessage(parts.length ? `同期完了: ${parts.join(' / ')}` : '同期完了: 変更なし');
       await refreshNotes();
     } catch (err) {
@@ -408,11 +570,22 @@ export default function App() {
     if (chatMode === id) setChatMode('deep-think');
   }
 
-  // ---------- 画面 ----------
+  async function handleEditPrompt(updated: { id: string; name: string; prompt: string }) {
+    const next = {
+      ...config,
+      customPrompts: (config.customPrompts ?? []).map((p) => (p.id === updated.id ? updated : p)),
+    };
+    setConfig(next);
+    await saveConfig(next);
+  }
+
+  // ---------- 画面レンダリング ----------
   return (
     <div className="safe-top flex h-full flex-col bg-[#070a13] text-gray-100">
-      <main className="min-h-0 flex-1">
-        {tab === 'notes' &&
+      <main className="min-h-0 flex-1 bg-[#070a13]">
+
+        {/* ファイルタブ */}
+        {tab === 'files' &&
           (showEditor && selectedNote ? (
             <EditorScreen
               note={selectedNote}
@@ -421,29 +594,44 @@ export default function App() {
               onChangeContent={setContent}
               onBack={() => setShowEditor(false)}
               onWikiLinkClick={handleWikiLinkClick}
-              onAddTag={(tag) => updateTags(Array.from(new Set([...(selectedNote.tags ?? []), tag.replace(/^#/, '')])))}
-              onRemoveTag={(tag) => updateTags((selectedNote.tags ?? []).filter((t) => t !== tag))}
+              onAddTag={(tag) =>
+                updateTags(selectedNote.name, content, Array.from(new Set([...(selectedNote.tags ?? []), tag.replace(/^#/, '')])))
+              }
+              onRemoveTag={(tag) =>
+                updateTags(selectedNote.name, content, (selectedNote.tags ?? []).filter((t) => t !== tag))
+              }
               onAiAction={handleAiAction}
               onOpenLocalGraph={() => {
                 setLocalGraphTarget(selectedNote.name);
                 setTab('graph');
               }}
+              onSend={sendChat}
+              chatMode={chatMode}
+              chatModes={chatModes}
+              onChangeChatMode={setChatMode}
+              pendingPrompt={pendingPrompt}
+              onAddPrompt={addPendingPrompt}
+              onRejectPrompt={rejectChat}
             />
           ) : (
-            <NotesScreen
+            <FilesScreen
               notes={notes}
               recentNames={recentNames}
               favorites={favorites}
               archived={archived}
               selectedName={selectedName}
+              chatModes={chatModes}
               onOpen={openNote}
               onCreate={createNote}
+              onCreateMemo={createMemo}
               onDelete={deleteNoteAction}
               onArchive={toggleArchive}
               onShare={shareNote}
               onToggleFavorite={toggleFavorite}
             />
           ))}
+
+        {/* グラフタブ */}
         {tab === 'graph' && (
           <GraphScreen
             notes={notes}
@@ -455,26 +643,29 @@ export default function App() {
             onCloseLocal={() => setLocalGraphTarget(null)}
           />
         )}
-        {tab === 'chat' && (
-          <ChatScreen
-            history={chatHistory}
-            streamedText={streamedText}
+
+        {/* ノートタブ（統合エディタ＋AIチャット） */}
+        {tab === 'note' && (
+          <NoteScreen
+            notes={notes}
+            selectedNote={noteTabSelectedNote}
+            content={noteTabContent}
+            autoSaveStatus={autoSaveStatus}
             isGenerating={isGenerating}
-            contextNote={selectedNote}
+            onChangeContent={setNoteTabContent}
+            onSelectNote={selectNoteForNoteTab}
+            onSend={sendChat}
+            onWikiLinkClick={handleWikiLinkClick}
+            pendingPrompt={pendingPrompt}
+            onAddPrompt={addPendingPrompt}
+            onRejectPrompt={rejectChat}
             chatMode={chatMode}
             chatModes={chatModes}
-            autoSaveStatus={autoSaveStatus}
-            onSend={sendChat}
             onChangeChatMode={setChatMode}
-            onClearContext={() => {
-              setSelectedName(null);
-              setContent('');
-              setShowEditor(false);
-              setChatHistory([]);
-            }}
-            onWikiLinkClick={handleWikiLinkClick}
           />
         )}
+
+        {/* 設定タブ */}
         {tab === 'settings' && (
           <SettingsScreen
             config={config}
@@ -485,13 +676,15 @@ export default function App() {
             onChangeModelMode={setAiModelMode}
             onSync={() => runSync()}
             onDeletePrompt={handleDeletePrompt}
+            onEditPrompt={handleEditPrompt}
           />
         )}
       </main>
+
       <BottomNav
         active={tab}
         onChange={(t) => {
-          if (t === 'notes' && tab === 'notes') setShowEditor(false);
+          if (t === 'files' && tab === 'files') setShowEditor(false);
           if (t !== 'graph') setLocalGraphTarget(null);
           setTab(t);
         }}
