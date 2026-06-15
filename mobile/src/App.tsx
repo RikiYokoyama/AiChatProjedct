@@ -164,6 +164,43 @@ export default function App() {
     const firstLine = title.split('\n')[0].trim();
     if (!firstLine) return;
 
+    const modeToUse = (aiMode ?? 'long-explain') as ChatMode;
+
+    // prompt-gen モードはノート作成ではなくチャットとして扱う
+    if (useAi && modeToUse === 'prompt-gen' && config.geminiApiKey) {
+      setChatMode('prompt-gen');
+      chatModeRef.current = 'prompt-gen';
+      setPendingPrompt(null);
+      const client = new GeminiClient(config.geminiApiKey);
+      const userPrompt = `「${firstLine}」というテーマ・用途に合ったカスタムプロンプトを作成してください。`;
+      const nextHistory: ChatMessage[] = [{ role: 'user', content: userPrompt }];
+      setChatHistory(nextHistory);
+      setStreamedText('');
+      setIsGenerating(true);
+      await client.chatStream(
+        nextHistory,
+        SYSTEM_PROMPTS['prompt-gen'],
+        aiModelMode,
+        null,
+        (chunk) => setStreamedText((prev) => prev + chunk),
+        (fullText) => {
+          setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+          setStreamedText('');
+          setIsGenerating(false);
+          const parsed = parseGeneratedPrompt(fullText);
+          setPendingPrompt(parsed ?? {
+            name: firstLine.slice(0, 10),
+            instruction: fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim(),
+          });
+        },
+        (err) => {
+          setIsGenerating(false);
+          alert(err instanceof Error ? err.message : String(err));
+        },
+      );
+      return;
+    }
+
     let name = cleanFilename(firstLine);
     let counter = 1;
     while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
@@ -178,7 +215,6 @@ export default function App() {
       setIsGenerating(true);
       let acc = initial;
       const client = new GeminiClient(config.geminiApiKey);
-      const modeToUse = (aiMode ?? 'long-explain') as ChatMode;
       const systemPrompt = SYSTEM_PROMPTS[modeToUse] ?? SYSTEM_PROMPTS['long-explain'];
       await client.chatStream(
         [
