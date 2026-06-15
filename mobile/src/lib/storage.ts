@@ -17,18 +17,14 @@ export interface CustomPrompt {
 
 export interface AppConfig {
   geminiApiKey: string;
-  githubToken: string;
-  githubRepo: string; // owner/repo
-  githubBranch: string;
+  gitRemoteUrl: string; // https://TOKEN@github.com/owner/repo.git
   autoSync: boolean;
   customPrompts: CustomPrompt[];
 }
 
 export const emptyConfig: AppConfig = {
   geminiApiKey: '',
-  githubToken: '',
-  githubRepo: '',
-  githubBranch: 'main',
+  gitRemoteUrl: '',
   autoSync: false,
   customPrompts: [],
 };

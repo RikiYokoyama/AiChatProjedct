@@ -1,9 +1,5 @@
 // モバイル向け軽量 GitHub 同期
-// git クローンの代わりに GitHub Contents API を使い、.md ファイル単位で双方向同期する。
-// 競合回避: 各ファイルの「最後に同期したコンテンツのハッシュ」を保持し、
-//   - ローカルのみ変更 → push
-//   - リモートのみ変更 → pull
-//   - 両方変更        → リモートを「<name> (conflict).md」として保存し、ローカルを push
+// git クローンの代わりに GitHub Git Trees API を使い、.md ファイルを archive/YYYY-MM/ 階層とローカルのフラット階層で双方向同期する。
 import { Preferences } from '@capacitor/preferences';
 import { listNotes, writeNote } from './storage';
 
@@ -18,15 +14,18 @@ export interface SyncResult {
 interface SyncState {
   // ファイル名 → 最後に同期した時点のコンテンツハッシュ
   baseHashes: Record<string, string>;
+  // ファイル名 → GitHub上の現在のリポジトリ内フルパス (例: "archive/2026-06/memo.md")
+  remotePaths: Record<string, string>;
 }
 
 async function loadSyncState(): Promise<SyncState> {
   const { value } = await Preferences.get({ key: 'github-sync-state' });
-  if (!value) return { baseHashes: {} };
+  if (!value) return { baseHashes: {}, remotePaths: {} };
   try {
-    return { baseHashes: {}, ...JSON.parse(value) };
+    const parsed = JSON.parse(value);
+    return { baseHashes: {}, remotePaths: {}, ...parsed };
   } catch {
-    return { baseHashes: {} };
+    return { baseHashes: {}, remotePaths: {} };
   }
 }
 
@@ -57,7 +56,8 @@ function decodeBase64Utf8(b64: string): string {
 }
 
 interface RemoteFile {
-  name: string;
+  name: string;      // ローカル用ファイル名 (例: "memo.md")
+  path: string;      // GitHub上のフルパス (例: "archive/2026-06/memo.md")
   sha: string;
   content: string;
 }
@@ -77,39 +77,61 @@ export class GitHubSync {
     };
   }
 
-  private async fetchRemoteList(): Promise<{ name: string; sha: string }[]> {
-    const res = await fetch(`${API}/repos/${this.repo}/contents/?ref=${encodeURIComponent(this.branch)}`, {
-      headers: this.headers(),
-    });
+  // Git Trees API を使ってリポジトリ内すべてのファイルを再帰的に取得
+  private async fetchRemoteList(): Promise<{ name: string; path: string; sha: string }[]> {
+    const res = await fetch(
+      `${API}/repos/${this.repo}/git/trees/${encodeURIComponent(this.branch)}?recursive=1`,
+      { headers: this.headers() }
+    );
     if (res.status === 404) return []; // 空のリポジトリ
     if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
-    const items = (await res.json()) as { name: string; sha: string; type: string }[];
-    return items.filter((i) => i.type === 'file' && i.name.toLowerCase().endsWith('.md'));
+    const data = await res.json();
+    const tree = data.tree as { path: string; sha: string; type: string }[];
+    
+    // archive/ フォルダ以下、またはルートにある .md ファイルを対象とする (backup/ は除外)
+    return tree
+      .filter((i) => i.type === 'blob' && i.path.toLowerCase().endsWith('.md') && !i.path.startsWith('backup/'))
+      .map((i) => {
+        const parts = i.path.split('/');
+        const name = parts[parts.length - 1];
+        return { name, path: i.path, sha: i.sha };
+      });
   }
 
-  private async fetchRemoteFile(name: string): Promise<RemoteFile> {
+  private async fetchRemoteFile(remotePath: string): Promise<RemoteFile> {
+    const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
     const res = await fetch(
-      `${API}/repos/${this.repo}/contents/${encodeURIComponent(name)}?ref=${encodeURIComponent(this.branch)}`,
+      `${API}/repos/${this.repo}/contents/${encodedPath}?ref=${encodeURIComponent(this.branch)}`,
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
     const data = await res.json();
-    return { name, sha: data.sha, content: decodeBase64Utf8(data.content) };
+    const name = remotePath.split('/').pop() || remotePath;
+    return { name, path: remotePath, sha: data.sha, content: decodeBase64Utf8(data.content) };
   }
 
-  private async putFile(name: string, content: string, sha?: string): Promise<void> {
+  private async putFile(remotePath: string, content: string, sha?: string): Promise<void> {
     const body: Record<string, unknown> = {
-      message: `sync: update ${name} from mobile`,
+      message: `sync: update ${remotePath} from mobile`,
       content: encodeBase64Utf8(content),
       branch: this.branch,
     };
     if (sha) body.sha = sha;
-    const res = await fetch(`${API}/repos/${this.repo}/contents/${encodeURIComponent(name)}`, {
+    const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
+    const res = await fetch(`${API}/repos/${this.repo}/contents/${encodedPath}`, {
       method: 'PUT',
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`GitHub push error ${res.status}: ${await res.text()}`);
+  }
+
+  // 新しいアーカイブ用パスを生成する (例: archive/YYYY-MM/name.md)
+  private generateArchivePath(name: string): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    return `archive/${year}-${month}/${name}`;
   }
 
   async sync(): Promise<SyncResult> {
@@ -121,61 +143,82 @@ export class GitHubSync {
     const state = await loadSyncState();
     const localNotes = await listNotes();
     const remoteList = await this.fetchRemoteList();
+    
+    // マッピングの整理
     const remoteMap = new Map(remoteList.map((r) => [r.name, r]));
     const localMap = new Map(localNotes.map((n) => [n.name, n]));
 
-    // ローカルにあるノートの処理
+    // 1. ローカルにあるノートの処理
     for (const note of localNotes) {
       const localHash = await sha256(note.content);
       const baseHash = state.baseHashes[note.name];
       const remote = remoteMap.get(note.name);
 
       if (!remote) {
-        // リモートに無い → 新規 push
-        await this.putFile(note.name, note.content);
+        // リモートに存在しない新規ファイル → 新しいアーカイブパスを作成してプッシュ
+        const archivePath = this.generateArchivePath(note.name);
+        await this.putFile(archivePath, note.content);
         state.baseHashes[note.name] = localHash;
+        state.remotePaths[note.name] = archivePath;
         result.pushed.push(note.name);
         continue;
       }
 
-      const remoteFile = await this.fetchRemoteFile(note.name);
+      // リモートにファイルがある場合
+      const remotePath = remote.path;
+      const remoteFile = await this.fetchRemoteFile(remotePath);
       const remoteHash = await sha256(remoteFile.content);
+
+      // パス情報を更新
+      state.remotePaths[note.name] = remotePath;
 
       if (remoteHash === localHash) {
         state.baseHashes[note.name] = localHash;
-        continue; // 同一
+        continue; // 変更なし
       }
 
       const localChanged = baseHash !== localHash;
       const remoteChanged = baseHash !== remoteHash;
 
       if (localChanged && remoteChanged && baseHash) {
-        // 双方変更 → リモート版を競合ファイルとして退避し、ローカルを push
+        // 双方変更 → 競合回避: リモート版を "(conflict).md" としてローカルに保存し、ローカルの内容を上書きプッシュ
         const conflictName = note.name.replace(/\.md$/i, '') + ' (conflict).md';
         await writeNote(conflictName, remoteFile.content);
-        await this.putFile(note.name, note.content, remoteFile.sha);
+        
+        await this.putFile(remotePath, note.content, remoteFile.sha);
         state.baseHashes[note.name] = localHash;
         result.conflicts.push(note.name);
       } else if (remoteChanged && !localChanged) {
-        // リモートのみ変更 → pull
+        // リモートのみ変更 → プル (ローカルに上書き)
         await writeNote(note.name, remoteFile.content);
         state.baseHashes[note.name] = remoteHash;
         result.pulled.push(note.name);
       } else {
-        // ローカルのみ変更（または初回同期） → push
-        await this.putFile(note.name, note.content, remoteFile.sha);
+        // ローカルのみ変更（または初回同期） → プッシュ
+        await this.putFile(remotePath, note.content, remoteFile.sha);
         state.baseHashes[note.name] = localHash;
         result.pushed.push(note.name);
       }
     }
 
-    // リモートにだけあるノート → pull
+    // 2. リモートにだけ新しく追加されたノートの処理
     for (const remote of remoteList) {
       if (localMap.has(remote.name)) continue;
-      const remoteFile = await this.fetchRemoteFile(remote.name);
+      
+      const remoteFile = await this.fetchRemoteFile(remote.path);
       await writeNote(remote.name, remoteFile.content);
       state.baseHashes[remote.name] = await sha256(remoteFile.content);
+      state.remotePaths[remote.name] = remote.path;
       result.pulled.push(remote.name);
+    }
+
+    // 保存状態のクリーンアップ (ローカルで削除されたファイルの削除など)
+    const activeNames = new Set(localNotes.map(n => n.name));
+    for (const key in state.baseHashes) {
+      if (!activeNames.has(key) && !remoteMap.has(key)) {
+        delete state.baseHashes[key];
+        delete state.remotePaths[key];
+      }
     }
 
     await saveSyncState(state);
@@ -183,6 +226,14 @@ export class GitHubSync {
   }
 }
 
-export async function syncNotes(token: string, repo: string, branch: string): Promise<SyncResult> {
-  return new GitHubSync(token, repo, branch || 'main').sync();
+function parseRemoteUrl(url: string): { token: string; repo: string; branch: string } {
+  // https://TOKEN@github.com/owner/repo.git
+  const m = url.match(/https:\/\/([^@]+)@github\.com\/([^/]+\/[^/.]+)(?:\.git)?/);
+  if (!m) return { token: '', repo: '', branch: 'main' };
+  return { token: m[1], repo: m[2], branch: 'main' };
+}
+
+export async function syncNotes(gitRemoteUrl: string): Promise<SyncResult> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  return new GitHubSync(token, repo, branch).sync();
 }

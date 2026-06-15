@@ -101,7 +101,7 @@ export default function App() {
       const list = await listNotes();
       setNotes(list);
       if (!cfg.geminiApiKey) setTab('settings');
-      if (cfg.autoSync && cfg.githubToken && cfg.githubRepo) {
+      if (cfg.autoSync && cfg.gitRemoteUrl) {
         runSync(cfg);
       }
     })();
@@ -614,7 +614,7 @@ export default function App() {
     setGitStatus('syncing');
     setGitMessage(null);
     try {
-      const result = await syncNotes(c.githubToken, c.githubRepo, c.githubBranch);
+      const result = await syncNotes(c.gitRemoteUrl);
       setGitStatus('success');
       const parts = [];
       if (result.pushed.length) parts.push(`送信 ${result.pushed.length}件`);
