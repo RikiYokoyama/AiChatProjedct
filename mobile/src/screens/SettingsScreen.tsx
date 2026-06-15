@@ -118,7 +118,12 @@ export default function SettingsScreen({
           今すぐ同期
         </button>
         {gitMessage && (
-          <p className={`text-xs ${gitStatus === 'error' ? 'text-red-400' : 'text-emerald-400'}`}>{gitMessage}</p>
+          <textarea
+            readOnly
+            value={gitMessage}
+            rows={3}
+            className={`w-full resize-none rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs outline-none select-all ${gitStatus === 'error' ? 'text-red-400' : 'text-emerald-400'}`}
+          />
         )}
       </section>
 
