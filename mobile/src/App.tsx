@@ -550,18 +550,21 @@ export default function App() {
       return;
     }
     setPendingPrompt(null);
-    // 新しい prompt-gen セッション開始時はログファイルをリセット
-    if (chatModeRef.current === 'prompt-gen' && chatHistory.length === 0) {
+    const isPromptGen = chatModeRef.current === 'prompt-gen';
+    // prompt-gen は毎回クリーンな会話で開始（他モードの履歴を混入させない）
+    const baseHistory: ChatMessage[] = isPromptGen ? [] : chatHistory;
+    if (isPromptGen) {
+      setChatHistory([]);
       setPromptLogFilename(null);
     }
     const client = new GeminiClient(config.geminiApiKey);
-    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
+    const nextHistory: ChatMessage[] = [...baseHistory, { role: 'user', content: prompt }];
     setChatHistory(nextHistory);
     setStreamedText('');
     setIsGenerating(true);
 
-    const contextName = noteTabSelectedName;
-    const contextContent = noteTabSelectedName ? noteTabContentRef.current : null;
+    const contextName = isPromptGen ? null : noteTabSelectedName;
+    const contextContent = isPromptGen ? null : (noteTabSelectedName ? noteTabContentRef.current : null);
 
     await client.chatStream(
       nextHistory,
