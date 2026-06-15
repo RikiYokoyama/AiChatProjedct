@@ -93,7 +93,7 @@ export default function SettingsScreen({
         </p>
         <Field label="GitリモートURL">
           <input
-            type="password"
+            type="text"
             value={draft.gitRemoteUrl}
             onChange={(e) => update({ gitRemoteUrl: e.target.value })}
             placeholder="https://ghp_...@github.com/username/my-notes.git"
