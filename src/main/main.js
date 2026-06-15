@@ -50,6 +50,112 @@ function saveConfig(newConfig) {
   }
 }
 
+// 再帰的にディレクトリ内のファイルを探索するヘルパー
+function getFilesRecursively(dir, filterExt = '.md') {
+  let results = [];
+  if (!fs.existsSync(dir)) return results;
+  const list = fs.readdirSync(dir, { withFileTypes: true });
+  for (const file of list) {
+    const res = path.resolve(dir, file.name);
+    if (file.isDirectory()) {
+      // backup フォルダと .git フォルダは検索対象から除外
+      if (file.name === 'backup' || file.name === '.git') continue;
+      results = results.concat(getFilesRecursively(res, filterExt));
+    } else if (file.isFile() && file.name.endsWith(filterExt)) {
+      results.push(res);
+    }
+  }
+  return results;
+}
+
+// コミット前にルートのマークダウンを archive/ に仕分ける
+function packMarkdownFiles(notesPath) {
+  const files = fs.readdirSync(notesPath, { withFileTypes: true });
+  const mdFiles = files.filter(f => f.isFile() && f.name.endsWith('.md'));
+  if (mdFiles.length === 0) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const archiveDir = path.join(notesPath, 'archive', `${year}-${month}`);
+  
+  if (!fs.existsSync(archiveDir)) {
+    fs.mkdirSync(archiveDir, { recursive: true });
+  }
+
+  for (const file of mdFiles) {
+    const srcPath = path.join(notesPath, file.name);
+    let destPath = path.join(archiveDir, file.name);
+
+    if (fs.existsSync(destPath)) {
+      const ext = path.extname(file.name);
+      const name = path.basename(file.name, ext);
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const timestamp = `${hours}${minutes}${seconds}`;
+      destPath = path.join(archiveDir, `${name}_${timestamp}${ext}`);
+    }
+
+    fs.renameSync(srcPath, destPath);
+    console.log(`Packed: ${srcPath} -> ${destPath}`);
+  }
+}
+
+// 同期後に archive/ のマークダウンをルートに引き出す (競合時は退避＆リネーム)
+function unpackMarkdownFiles(notesPath) {
+  // ① 安全対策: ルート直下の既存 .md ファイルをすべて backup/YYYYMMDD_HHMMSS/ へコピーして退避
+  const rootFiles = fs.readdirSync(notesPath, { withFileTypes: true })
+                      .filter(f => f.isFile() && f.name.endsWith('.md'));
+  const now = new Date();
+
+  if (rootFiles.length > 0) {
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const date = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const backupDir = path.join(notesPath, 'backup', `${year}${month}${date}_${hours}${minutes}${seconds}`);
+    
+    fs.mkdirSync(backupDir, { recursive: true });
+    for (const file of rootFiles) {
+      fs.copyFileSync(path.join(notesPath, file.name), path.join(backupDir, file.name));
+    }
+    console.log(`Backed up ${rootFiles.length} files to ${backupDir}`);
+  }
+
+  // ② archive/ 以下のすべての .md をルート直下へコピー
+  const archiveRoot = path.join(notesPath, 'archive');
+  if (!fs.existsSync(archiveRoot)) return;
+
+  const archivedFiles = getFilesRecursively(archiveRoot, '.md');
+
+  for (const srcPath of archivedFiles) {
+    const filename = path.basename(srcPath);
+    let destPath = path.join(notesPath, filename);
+
+    if (fs.existsSync(destPath)) {
+      const srcBuf = fs.readFileSync(srcPath);
+      const destBuf = fs.readFileSync(destPath);
+      if (srcBuf.equals(destBuf)) {
+        // 中身が同一ならコピーをスキップ
+        continue;
+      }
+      
+      // 中身が異なる場合は _conflict_分秒 を付与して保存
+      const ext = path.extname(filename);
+      const name = path.basename(filename, ext);
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      destPath = path.join(notesPath, `${name}_conflict_${minutes}${seconds}${ext}`);
+    }
+
+    fs.copyFileSync(srcPath, destPath);
+    console.log(`Unpacked: ${srcPath} -> ${destPath}`);
+  }
+}
+
 async function runGitSync() {
   const notesPath = appConfig.notesPath;
 
@@ -65,6 +171,12 @@ async function runGitSync() {
       await git.init();
     }
 
+    // 自動バックアップ用のbackupフォルダをGit管理外にする
+    const gitignorePath = path.join(notesPath, '.gitignore');
+    if (!fs.existsSync(gitignorePath)) {
+      fs.writeFileSync(gitignorePath, 'backup/\n', 'utf8');
+    }
+
     if (appConfig.gitRemoteUrl) {
       const remotes = await git.getRemotes();
       const hasOrigin = remotes.some((remote) => remote.name === 'origin');
@@ -78,6 +190,10 @@ async function runGitSync() {
 
     mainWindow?.webContents.send('git-status-changed', 'syncing');
 
+    // 1. コミット前にルート直下の .md をフォルダ分け (Pack)
+    packMarkdownFiles(notesPath);
+
+    // 2. Gitにステージ＆コミット
     await git.add('.');
     const status = await git.status();
 
@@ -85,6 +201,7 @@ async function runGitSync() {
       await git.commit('Auto-commit: AI chat log');
     }
 
+    // 3. リモートと同期 (Pull & Push)
     if (appConfig.gitRemoteUrl) {
       let branchName = 'main';
 
@@ -96,17 +213,34 @@ async function runGitSync() {
         branchName = 'main';
       }
 
+      // プッシュする前に、他の端末での変更をプルして取り込む
+      try {
+        await git.pull('origin', branchName, { '--rebase': 'true' });
+      } catch (pullErr) {
+        console.warn('Git pull failed, proceeding with push:', pullErr.message);
+      }
+
       await git.push('origin', branchName, { '--set-upstream': null });
     }
+
+    // 4. 同期完了後に archive/ の .md をルート直下へ復元 (Unpack)
+    unpackMarkdownFiles(notesPath);
 
     mainWindow?.webContents.send('git-status-changed', 'success');
     return { success: true };
   } catch (err) {
     console.error('Git sync failed:', err);
+    // 失敗した場合も、念のため手元のファイルを復元しておく
+    try {
+      unpackMarkdownFiles(notesPath);
+    } catch (restoreErr) {
+      console.error('Failed to restore files after git failure:', restoreErr);
+    }
     mainWindow?.webContents.send('git-status-changed', 'error', err.message);
     return { success: false, error: err.message };
   }
 }
+
 
 function createWindow() {
   mainWindow = new BrowserWindow({

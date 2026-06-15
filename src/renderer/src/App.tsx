@@ -33,7 +33,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import GraphView from './GraphView';
-import { AiModelMode, AiSpeedMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, SYSTEM_PROMPTS } from './lib/gemini';
+import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, SYSTEM_PROMPTS } from './lib/gemini';
 
 interface CustomPrompt {
   id: string;
@@ -157,10 +157,23 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
 
+  // 新機能: ソート・サジェスト・Wikiリンクコンテキストメニュー状態
+  const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'>('date-desc');
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [suggestIndex, setSuggestIndex] = useState(-1);
+  const [wikiLinkContextMenu, setWikiLinkContextMenu] = useState<{
+    x: number;
+    y: number;
+    noteName: string;
+    displayText: string;
+  } | null>(null);
+
   useEffect(() => {
     const handleCloseMenu = () => {
       setContextMenu(null);
       setPreviewContextMenu(null);
+      setWikiLinkContextMenu(null);
+      setShowSuggest(false);
     };
     window.addEventListener('click', handleCloseMenu);
     return () => window.removeEventListener('click', handleCloseMenu);
@@ -182,8 +195,7 @@ export default function App() {
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatMode, setChatMode] = useState<string>('deep-think');
-  const [aiSpeedMode, setAiSpeedMode] = useState<AiSpeedMode>('fast');
-  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
+  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [pendingPrompt, setPendingPrompt] = useState<{ name: string; prompt: string } | null>(null);
   const [newPromptName, setNewPromptName] = useState('');
@@ -315,11 +327,14 @@ export default function App() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
-  const filteredNotes = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    if (!query) return notes;
-    return notes.filter((note) => note.name.toLowerCase().includes(query));
-  }, [notes, searchQuery]);
+  const getCreatedDate = (note: Note): Date => {
+    const match = note.content.match(/作成日時\s*[:：]\s*([^\n\r]+)/);
+    if (match) {
+      const d = new Date(match[1].trim());
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date(note.updatedAt);
+  };
 
   // 全タグ一覧用データの抽出
   const allTagsMap = useMemo(() => {
@@ -335,6 +350,127 @@ export default function App() {
     }
     return map;
   }, [notes]);
+
+  const filteredNotes = useMemo(() => {
+    let result = [...notes];
+    const query = searchQuery.trim();
+    if (query) {
+      const queryLower = query.toLowerCase();
+      if (queryLower.startsWith('tag:')) {
+        const tagName = query.substring(4).trim().toLowerCase();
+        result = result.filter((note) =>
+          (note.tags || []).some((t) => t.toLowerCase().includes(tagName))
+        );
+      } else if (queryLower.startsWith('#')) {
+        const tagName = query.substring(1).trim().toLowerCase();
+        result = result.filter((note) =>
+          (note.tags || []).some((t) => t.toLowerCase().includes(tagName))
+        );
+      } else if (queryLower.startsWith('link:')) {
+        const linkName = query.substring(5).trim().toLowerCase();
+        result = result.filter((note) =>
+          (note.wikiLinks || []).some((l) => l.toLowerCase().includes(linkName))
+        );
+      } else {
+        result = result.filter((note) => note.name.toLowerCase().includes(queryLower));
+      }
+    }
+
+    return result.sort((a, b) => {
+      if (sortBy === 'name-asc') {
+        return a.name.localeCompare(b.name, 'ja');
+      } else if (sortBy === 'name-desc') {
+        return b.name.localeCompare(a.name, 'ja');
+      } else if (sortBy === 'date-asc') {
+        const da = getCreatedDate(a);
+        const db = getCreatedDate(b);
+        return da.getTime() - db.getTime();
+      } else {
+        const da = getCreatedDate(a);
+        const db = getCreatedDate(b);
+        return db.getTime() - da.getTime();
+      }
+    });
+  }, [notes, searchQuery, sortBy]);
+
+  // 検索サジェスト候補の抽出
+  const suggestions = useMemo(() => {
+    const query = searchQuery.trim();
+    if (!query) return [];
+    const queryLower = query.toLowerCase();
+
+    if (queryLower.startsWith('tag:')) {
+      const val = query.substring(4).trim().toLowerCase();
+      const allTags = Object.keys(allTagsMap);
+      return allTags
+        .filter((t) => t.toLowerCase().includes(val))
+        .map((t) => ({ type: 'tag', value: t, label: `#${t}` }));
+    } else if (queryLower.startsWith('#')) {
+      const val = query.substring(1).trim().toLowerCase();
+      const allTags = Object.keys(allTagsMap);
+      return allTags
+        .filter((t) => t.toLowerCase().includes(val))
+        .map((t) => ({ type: 'tag', value: t, label: `#${t}` }));
+    } else if (queryLower.startsWith('link:')) {
+      const val = query.substring(5).trim().toLowerCase();
+      return notes
+        .filter((n) => n.name.toLowerCase().includes(val))
+        .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name}` }));
+    } else {
+      return notes
+        .filter((n) => n.name.toLowerCase().includes(queryLower))
+        .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name}` }));
+    }
+  }, [notes, searchQuery, allTagsMap]);
+
+  const selectSuggestion = (s: { type: string; value: string }) => {
+    if (s.type === 'tag') {
+      if (searchQuery.toLowerCase().startsWith('tag:')) {
+        setSearchQuery(`tag:${s.value}`);
+      } else {
+        setSearchQuery(`#${s.value}`);
+      }
+    } else if (s.type === 'link') {
+      setSearchQuery(`link:${s.value}`);
+    } else {
+      setSearchQuery(s.value);
+    }
+    setShowSuggest(false);
+    setSuggestIndex(-1);
+  };
+
+  // Wikiリンク解除処理
+  const handleRemoveWikiLink = async () => {
+    if (!wikiLinkContextMenu || !selectedNote) return;
+    const { noteName, displayText } = wikiLinkContextMenu;
+
+    let nextContent = content;
+    const escapedNoteName = noteName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const escapedDisplayText = displayText.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+    // パターン1: [[noteName|displayText]]
+    const pattern1 = new RegExp(`\\[\\[${escapedNoteName}\\|${escapedDisplayText}\\]\\]`, 'g');
+    // パターン2: [[noteName]]
+    const pattern2 = new RegExp(`\\[\\[${escapedNoteName}\\]\\]`, 'g');
+
+    nextContent = nextContent.replace(pattern1, displayText);
+    if (displayText === noteName) {
+      nextContent = nextContent.replace(pattern2, noteName);
+    } else {
+      nextContent = nextContent.replace(pattern2, noteName);
+    }
+
+    setContent(nextContent);
+    setNoteContext(nextContent);
+
+    const result = await window.electronAPI.saveNote({ filename: selectedNote.name, content: nextContent });
+    if (result.success) {
+      setSelectedNote((prev) => (prev ? { ...prev, content: nextContent } : null));
+      await loadNotesList();
+    }
+    setWikiLinkContextMenu(null);
+  };
+
 
   // 全ノートのリンク関係（発リンク・被リンク）データの解決
   const globalLinksMap = useMemo(() => {
@@ -481,7 +617,6 @@ export default function App() {
     await client.chatStream(
       [{ role: 'user', content: `「${title}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。` }],
       'long-explain',
-      'fast',
       aiModelMode,
       null,
       (chunk) => {
@@ -815,7 +950,6 @@ export default function App() {
     await client.chatStream(
       nextHistory,
       getSystemPrompt(chatMode),
-      aiSpeedMode,
       aiModelMode,
       noteContext,
       (chunk) => setStreamedText((prev) => prev + chunk),
@@ -1084,14 +1218,70 @@ export default function App() {
                   <Plus className="h-4 w-4" />
                   新規ノート作成
                 </button>
-                <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
+                <div className="relative flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
                   <Search className="h-4 w-4 text-gray-500" />
                   <input
                     className="w-full bg-transparent text-sm outline-none"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="検索"
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setShowSuggest(true);
+                      setSuggestIndex(-1);
+                    }}
+                    onFocus={() => setShowSuggest(true)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (showSuggest && suggestions.length > 0) {
+                        if (e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          setSuggestIndex(prev => Math.min(prev + 1, suggestions.length - 1));
+                        } else if (e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          setSuggestIndex(prev => Math.max(prev - 1, -1));
+                        } else if (e.key === 'Enter') {
+                          if (suggestIndex >= 0) {
+                            e.preventDefault();
+                            selectSuggestion(suggestions[suggestIndex]);
+                          }
+                        } else if (e.key === 'Escape') {
+                          setShowSuggest(false);
+                          setSuggestIndex(-1);
+                        }
+                      }
+                    }}
+                    placeholder="検索 (tag:タグ名, link:ノート名)"
                   />
+                  {showSuggest && suggestions.length > 0 && (
+                    <ul 
+                      className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded border border-white/10 bg-[#0c1222] py-1 shadow-xl top-full"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {suggestions.map((s, idx) => (
+                        <li
+                          key={idx}
+                          onClick={() => selectSuggestion(s)}
+                          className={`cursor-pointer px-3 py-1.5 text-xs transition-colors ${
+                            idx === suggestIndex ? 'bg-indigo-600 text-white' : 'hover:bg-white/5 text-gray-300'
+                          }`}
+                        >
+                          {s.label}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="flex items-center justify-between border-b border-white/5 pb-2 text-xs text-gray-400 px-1">
+                  <span>並び替え:</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="rounded border border-white/10 bg-[#0f172a] px-2 py-1 outline-none text-gray-200"
+                  >
+                    <option value="date-desc">作成日新しい順</option>
+                    <option value="date-asc">作成日古い順</option>
+                    <option value="name-asc">名前順 (A-Z)</option>
+                    <option value="name-desc">名前逆順 (Z-A)</option>
+                  </select>
                 </div>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
@@ -1285,6 +1475,7 @@ export default function App() {
                         const { href, children } = props;
                         if (href && href.startsWith('#wiki-')) {
                           const noteName = decodeURIComponent(href.replace('#wiki-', ''));
+                          const displayText = children?.toString() || noteName;
                           return (
                             <span
                               className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
@@ -1292,6 +1483,16 @@ export default function App() {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 handleWikiLinkClick(noteName);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setWikiLinkContextMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  noteName,
+                                  displayText,
+                                });
                               }}
                             >
                               {children}
@@ -1417,20 +1618,11 @@ export default function App() {
                 </select>
                 <select
                   className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
-                  value={aiSpeedMode}
-                  onChange={(e) => setAiSpeedMode(e.target.value as AiSpeedMode)}
-                >
-                  <option value="fast">高速</option>
-                  <option value="thinking">思考</option>
-                </select>
-                <select
-                  className="rounded bg-black/40 border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
                   value={aiModelMode}
                   onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
                 >
-                  <option value="flash-lite">Lite</option>
                   <option value="flash">Flash</option>
-                  <option value="flash-3-5">3.5</option>
+                  <option value="pro">Pro</option>
                 </select>
                 {autoSaveStatus !== 'idle' && (
                   <span className="ml-auto flex items-center text-xs text-gray-500">
@@ -1629,20 +1821,11 @@ export default function App() {
                   </select>
                   <select
                     className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
-                    value={aiSpeedMode}
-                    onChange={(e) => setAiSpeedMode(e.target.value as AiSpeedMode)}
-                  >
-                    <option value="fast">高速</option>
-                    <option value="thinking">思考</option>
-                  </select>
-                  <select
-                    className="flex-1 rounded bg-black/40 border border-white/10 px-2 py-1.5 text-xs text-gray-300 outline-none hover:bg-black/60 transition-colors"
                     value={aiModelMode}
                     onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
                   >
-                    <option value="flash-lite">Lite</option>
                     <option value="flash">Flash</option>
-                    <option value="flash-3-5">3.5</option>
+                    <option value="pro">Pro</option>
                   </select>
                 </div>
               </div>
@@ -1715,6 +1898,28 @@ export default function App() {
             onClick={handleWrapPreviewSelection}
           >
             Wikiリンク化する
+          </button>
+        </div>
+      )}
+
+      {/* Wikiリンク用右クリックメニュー（リンクをやめる） */}
+      {wikiLinkContextMenu && (
+        <div
+          className="fixed z-[100] min-w-[120px] rounded border border-white/10 bg-[#111625] py-1 shadow-2xl editor-context-menu"
+          style={{ top: `${wikiLinkContextMenu.y}px`, left: `${wikiLinkContextMenu.x}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="flex w-full items-center px-4 py-2 text-left text-xs text-gray-200 hover:bg-indigo-500/20 hover:text-indigo-300 transition-colors"
+            onClick={handleRemoveWikiLink}
+          >
+            リンクをやめる
+          </button>
+          <button
+            className="flex w-full items-center px-4 py-2 text-left text-xs text-gray-400 hover:bg-white/5 transition-colors border-t border-white/5"
+            onClick={() => setWikiLinkContextMenu(null)}
+          >
+            キャンセル
           </button>
         </div>
       )}

@@ -4,13 +4,11 @@ export interface ChatMessage {
 }
 
 export type ChatMode = 'deep-think' | 'markdown-struct' | 'long-explain' | 'prompt-gen';
-export type AiSpeedMode = 'thinking' | 'fast';
-export type AiModelMode = 'flash-lite' | 'flash' | 'flash-3-5';
+export type AiModelMode = 'flash' | 'pro';
 
 const MODEL_CANDIDATES: Record<AiModelMode, string[]> = {
-  'flash-lite': ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash'],
-  flash: ['gemini-2.5-flash', 'gemini-1.5-flash'],
-  'flash-3-5': ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'],
+  flash: ['gemini-3.5-flash', 'gemini-3.1-flash-lite'],
+  pro: ['gemini-3.5-pro', 'gemini-3.1-pro'],
 };
 
 export const SYSTEM_PROMPTS: Record<ChatMode, string> = {
@@ -24,7 +22,7 @@ export async function generateNoteTitle(apiKey: string, userPrompt: string, aiRe
   const prompt = `以下の会話から、Markdownのファイル名に適した短いタイトル（20文字以内、日本語可）を1行だけ出力してください。記号や説明は不要です。\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(apiKey)}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -44,7 +42,7 @@ export async function generateNoteTags(apiKey: string, userPrompt: string, aiRep
   const prompt = `以下の会話から、話の内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(apiKey)}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -67,7 +65,6 @@ export class GeminiClient {
   async chatStream(
     history: ChatMessage[],
     systemInstruction: string,
-    speedMode: AiSpeedMode,
     modelMode: AiModelMode,
     noteContext: string | null,
     onChunk: (text: string) => void,
@@ -102,7 +99,6 @@ export class GeminiClient {
               systemInstruction: { parts: [{ text: systemText }] },
               generationConfig: {
                 temperature: 0.7,
-                thinkingConfig: { thinkingBudget: speedMode === 'thinking' ? -1 : 0 },
               },
             }),
           },
