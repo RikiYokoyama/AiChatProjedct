@@ -86,6 +86,7 @@ export class GitHubSync {
     if (res.status === 404) return []; // 空のリポジトリ
     if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
     const data = await res.json();
+    if (!data.tree) throw new Error(`GitHub APIレスポンスが不正です。リポジトリ "${this.repo}" とブランチ "${this.branch}" を確認してください。レスポンス: ${JSON.stringify(data).slice(0, 200)}`);
     const tree = data.tree as { path: string; sha: string; type: string }[];
     
     // archive/ フォルダ以下、またはルートにある .md ファイルを対象とする (backup/ は除外)
