@@ -62,7 +62,7 @@ export default function SwipeableNoteRow({
   return (
     <div className="relative overflow-hidden rounded-lg">
       {/* 右スワイプで現れる左側アクション */}
-      <div className="absolute inset-y-0 left-0 flex" style={{ width: MAX }}>
+      <div className="absolute inset-y-0 left-0 flex" style={{ width: MAX, visibility: offset > 0 ? 'visible' : 'hidden' }}>
         <button
           className="flex flex-1 flex-col items-center justify-center gap-0.5 bg-amber-600 text-white"
           onClick={() => { onToggleFavorite(); close(); }}
@@ -79,7 +79,7 @@ export default function SwipeableNoteRow({
         </button>
       </div>
       {/* 左スワイプで現れる右側アクション */}
-      <div className="absolute inset-y-0 right-0 flex" style={{ width: MAX }}>
+      <div className="absolute inset-y-0 right-0 flex" style={{ width: MAX, visibility: offset < 0 ? 'visible' : 'hidden' }}>
         <button
           className="flex flex-1 flex-col items-center justify-center gap-0.5 bg-gray-600 text-white"
           onClick={() => { onArchive(); close(); }}

@@ -1,17 +1,22 @@
 import { useMemo, useState } from 'react';
-import { Archive, FileText, Plus, Search, Sparkles, X } from 'lucide-react';
+import { Archive, FileText, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
 import { Note, noteTitle } from '../lib/notes';
 import SwipeableNoteRow from '../components/SwipeableNoteRow';
 import Fab from '../components/Fab';
+import CreateModal from '../components/CreateModal';
 
-export default function NotesScreen({
+type ModalType = 'file' | 'ai' | 'memo' | null;
+
+export default function FilesScreen({
   notes,
   recentNames,
   favorites,
   archived,
   selectedName,
+  chatModes,
   onOpen,
   onCreate,
+  onCreateMemo,
   onDelete,
   onArchive,
   onShare,
@@ -22,8 +27,10 @@ export default function NotesScreen({
   favorites: string[];
   archived: string[];
   selectedName: string | null;
+  chatModes: { id: string; label: string }[];
   onOpen: (note: Note) => void;
-  onCreate: (useAi: boolean) => void;
+  onCreate: (title: string, useAi: boolean, aiMode?: string) => void;
+  onCreateMemo: (title: string) => void;
   onDelete: (note: Note) => void;
   onArchive: (note: Note) => void;
   onShare: (note: Note) => void;
@@ -32,6 +39,28 @@ export default function NotesScreen({
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
+  const [modal, setModal] = useState<ModalType>(null);
+  const [inputValue, setInputValue] = useState('');
+  const [selectedAiMode, setSelectedAiMode] = useState('long-explain');
+
+  const openModal = (type: ModalType) => {
+    setModal(type);
+    setInputValue('');
+    setFabOpen(false);
+  };
+
+  const closeModal = () => {
+    setModal(null);
+    setInputValue('');
+  };
+
+  const handleSubmit = () => {
+    if (!inputValue.trim()) return;
+    if (modal === 'file') onCreate(inputValue.trim(), false);
+    else if (modal === 'ai') onCreate(inputValue.trim(), true, selectedAiMode);
+    else if (modal === 'memo') onCreateMemo(inputValue.trim());
+    closeModal();
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -41,7 +70,6 @@ export default function NotesScreen({
         (n) => n.name.toLowerCase().includes(q) || n.tags.some((t) => t.toLowerCase().includes(q)),
       );
     }
-    // お気に入りを先頭に
     return [...list].sort((a, b) => {
       const fa = favorites.includes(a.name) ? 0 : 1;
       const fb = favorites.includes(b.name) ? 0 : 1;
@@ -60,7 +88,7 @@ export default function NotesScreen({
   );
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="relative flex h-full flex-col bg-[#070a13]">
       {/* 検索バー */}
       <div className="shrink-0 space-y-2 px-4 pb-2 pt-3">
         <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5">
@@ -69,7 +97,7 @@ export default function NotesScreen({
             className="w-full bg-transparent text-sm outline-none placeholder:text-gray-600"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="ノート・タグを検索"
+            placeholder="ファイル・タグを検索"
           />
           {query && (
             <button onClick={() => setQuery('')}>
@@ -88,11 +116,11 @@ export default function NotesScreen({
         </button>
       </div>
 
-      {/* 最近開いたノートのカルーセル */}
+      {/* 最近開いたファイルのカルーセル */}
       {!showArchived && recentNotes.length > 0 && (
         <div className="shrink-0 pb-2">
           <div className="px-4 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
-            最近開いたノート
+            最近開いたファイル
           </div>
           <div className="flex gap-2 overflow-x-auto px-4 pb-1" style={{ scrollbarWidth: 'none' }}>
             {recentNotes.map((note) => (
@@ -113,11 +141,11 @@ export default function NotesScreen({
         </div>
       )}
 
-      {/* ノート一覧（スワイプアクション付き） */}
+      {/* ファイル一覧 */}
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 pb-28">
         {filtered.length === 0 ? (
           <div className="py-12 text-center text-sm text-gray-500">
-            {showArchived ? 'アーカイブされたノートはありません' : 'ノートがありません。右下の＋から作成できます'}
+            {showArchived ? 'アーカイブされたファイルはありません' : 'ファイルがありません。右下の＋から作成できます'}
           </div>
         ) : (
           filtered.map((note) => (
@@ -141,16 +169,22 @@ export default function NotesScreen({
         {fabOpen && (
           <>
             <button
-              onClick={() => { setFabOpen(false); onCreate(true); }}
+              onClick={() => openModal('ai')}
               className="flex items-center gap-2 rounded-full bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg active:bg-violet-500"
             >
-              <Sparkles className="h-4 w-4" /> AIノート作成
+              <Sparkles className="h-4 w-4" /> AIファイル作成
             </button>
             <button
-              onClick={() => { setFabOpen(false); onCreate(false); }}
+              onClick={() => openModal('file')}
               className="flex items-center gap-2 rounded-full bg-gray-700 px-4 py-2.5 text-sm font-semibold text-white shadow-lg active:bg-gray-600"
             >
-              <FileText className="h-4 w-4" /> 新規ノート
+              <FileText className="h-4 w-4" /> 新規ファイル
+            </button>
+            <button
+              onClick={() => openModal('memo')}
+              className="flex items-center gap-2 rounded-full bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg active:bg-amber-400"
+            >
+              <StickyNote className="h-4 w-4" /> メモ作成
             </button>
           </>
         )}
@@ -160,6 +194,60 @@ export default function NotesScreen({
           icon={<Plus className={`h-6 w-6 transition-transform ${fabOpen ? 'rotate-45' : ''}`} />}
         />
       </div>
+
+      {/* モーダル */}
+      {modal === 'file' && (
+        <CreateModal
+          title="新規ファイル作成"
+          placeholder={`ファイル名を入力...\n（複数行書いても最初の行がタイトルになります）`}
+          submitLabel="ファイルを作成"
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          onClose={closeModal}
+        />
+      )}
+      {modal === 'ai' && (
+        <CreateModal
+          title="AIファイル作成"
+          placeholder={`AIに書かせるテーマを入力...\n（詳しく書くほど精度が上がります）`}
+          submitLabel="AIで生成する"
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          onClose={closeModal}
+        >
+          <div className="mb-3">
+            <p className="mb-1.5 text-xs text-gray-500">プロンプト</p>
+            <div className="flex flex-wrap gap-1.5">
+              {chatModes.map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setSelectedAiMode(m.id)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    selectedAiMode === m.id
+                      ? 'bg-violet-600 text-white'
+                      : 'bg-white/5 text-gray-300 active:bg-white/10'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CreateModal>
+      )}
+      {modal === 'memo' && (
+        <CreateModal
+          title="メモ作成"
+          placeholder={`メモのタイトルを入力...\n（最初の行がタイトルになります）`}
+          submitLabel="メモを保存"
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          onClose={closeModal}
+        />
+      )}
     </div>
   );
 }

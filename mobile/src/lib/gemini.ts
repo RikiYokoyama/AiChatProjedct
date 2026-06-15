@@ -4,27 +4,25 @@ export interface ChatMessage {
 }
 
 export type ChatMode = 'deep-think' | 'markdown-struct' | 'long-explain' | 'prompt-gen';
-export type AiSpeedMode = 'thinking' | 'fast';
-export type AiModelMode = 'flash-lite' | 'flash' | 'flash-3-5';
+export type AiModelMode = 'flash' | 'pro';
 
 const MODEL_CANDIDATES: Record<AiModelMode, string[]> = {
-  'flash-lite': ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash'],
-  flash: ['gemini-2.5-flash', 'gemini-1.5-flash'],
-  'flash-3-5': ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'],
+  flash: ['gemini-3.5-flash', 'gemini-3.1-flash-lite'],
+  pro: ['gemini-3.5-pro', 'gemini-3.1-pro'],
 };
 
 export const SYSTEM_PROMPTS: Record<ChatMode, string> = {
   'deep-think': 'ユーザーの質問やテーマに対して前提知識を含めて徹底的に深掘りし、実質的な答えや解決策を必ず提示してください。回答内容は、最新の情報であるか、また事実関係が正確であるかを厳格にファクトチェックした上で、不確かな憶測を避けて信頼性の高い内容を作成してください。出力全体の長さは、Markdown記号等も含めて200文字〜500文字程度に収まるよう要約し、簡潔に回答してください。回答の作成にあたっては、【内部リンク生成ルール】（重要な概念、プロジェクト名、特定のツール名、日付、または重要なキーワードは半角の二重ブラケットで囲み、Obsidianの内部リンク形式 `[[キーワード]]` や `[[実際のノート名|表示名]]` で積極的に出力する。未作成ノートでも構わないが、過剰な繰り返しや日常単語へのリンクは避ける）を厳格に適用してください。',
   'markdown-struct': 'バラバラのメモを綺麗に構造化し、そのままObsidianに貼り付けられる美しいMarkdown（見出し・箇条書き・要約・末尾に `tags: [タグ名]`）で出力してください。また、出力する文章全体の長さは、Markdown記号等も含めて200文字〜500文字程度に収まるように要約して構成してください。回答の作成にあたっては、【内部リンク生成ルール】（重要な概念、プロジェクト名、特定のツール名、日付、または重要なキーワードは半角の二重ブラケットで囲み、Obsidianの内部リンク形式 `[[キーワード]]` や `[[実際のノート名|表示名]]` で積極的に出力する。未作成ノートでも構わないが、過剰な繰り返しや日常単語へのリンクは避ける）を厳格に適用してください。',
   'long-explain': '提示されたテーマについて、前提知識がない読者でも深く理解できるよう、網羅的で詳細な解説記事（目安：1000文字〜5000文字程度）を作成してください。単に要約するのではなく、背景、仕組み、具体例、メリット・デメリット、今後の展望まで詳細に執筆してください。箇条書きだけで終わらせず、各項目ごとに複数の段落を用いて丁寧な解説文（地の文）を記述してください。また、提供する情報はできる限り最新かつ正確な事実に基づいているか（ファクトチェック）を自ら厳格に検証した上で、信頼性の高い根拠を基に記述してください。回答の作成にあたっては、【内部リンク生成ルール】（重要な概念、プロジェクト名、特定のツール名、日付、または重要なキーワードは半角 of 二重ブラケットで囲み、Obsidianの内部リンク形式 `[[キーワード]]` や `[[実際のノート名|表示名]]` で積極的に出力する。未作成ノートでも構わないが、過剰な繰り返しや日常単語へのリンクは避ける）を厳格に適用してください。',
-  'prompt-gen': 'ユーザーの要望に合わせて、AIチャット用のカスタムプロンプト（指示内容）を作成してください。出力の最後（または返答内）に、必ず以下の [PROMPT] フォーマットのブロックを含めて出力してください。これ以外の説明や前置きは簡潔にしてください。\n\n[PROMPT]\n名前: プロンプトのわかりやすい表示名\n指示: AIに対する具体的なシステムプロンプト指示テキスト全体\n[/PROMPT]\n回答の作成にあたっては、【内部リンク生成ルール】（重要な概念、プロジェクト名、特定のツール名、日付、または重要なキーワードは半角の二重ブラケットで囲み、Obsidianの内部リンク形式 `[[キーワード]]` や `[[実際のノート名|表示名]]` で積極的に出力する。未作成ノートでも構わないが、過剰な繰り返しや日常単語へのリンクは避ける）を厳格に適用してください。',
+  'prompt-gen': 'ユーザーの要望に合わせて、AIチャット用のカスタムプロンプト（指示内容）を作成してください。出力の最後（または返答内）に、必ず以下の [PROMPT] フォーマットのブロックを含めて出力してください。ブロック外の説明は簡潔にし、最後に必ず「このプロンプトを追加しますか？」と1行で質問してください。\n\n【重要】名前フィールドは必ず10文字以内の短い日本語にしてください（例: 翻訳補助、議事録、要件定義）。\n\n[PROMPT]\n名前: 10文字以内の短い表示名\n指示: AIに対する具体的なシステムプロンプト指示テキスト全体\n[/PROMPT]\n\nこのプロンプトを追加しますか？',
 };
 
 export async function generateNoteTitle(apiKey: string, userPrompt: string, aiReply: string): Promise<string> {
   const prompt = `以下の会話から、Markdownのファイル名に適した短いタイトル（20文字以内、日本語可）を1行だけ出力してください。記号や説明は不要です。\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(apiKey)}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -44,7 +42,7 @@ export async function generateNoteTags(apiKey: string, userPrompt: string, aiRep
   const prompt = `以下の会話から、話の内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(apiKey)}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -67,7 +65,6 @@ export class GeminiClient {
   async chatStream(
     history: ChatMessage[],
     systemInstruction: string,
-    speedMode: AiSpeedMode,
     modelMode: AiModelMode,
     noteContext: string | null,
     onChunk: (text: string) => void,
@@ -102,7 +99,6 @@ export class GeminiClient {
               systemInstruction: { parts: [{ text: systemText }] },
               generationConfig: {
                 temperature: 0.7,
-                thinkingConfig: { thinkingBudget: speedMode === 'thinking' ? -1 : 0 },
               },
             }),
           },

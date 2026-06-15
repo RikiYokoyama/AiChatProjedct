@@ -1,11 +1,11 @@
-import { FileText, MessageSquare, Network, Settings } from 'lucide-react';
+import { BookOpen, FileText, Network, Settings } from 'lucide-react';
 
-export type Tab = 'notes' | 'graph' | 'chat' | 'settings';
+export type Tab = 'files' | 'graph' | 'note' | 'settings';
 
 const tabs: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: 'notes', label: 'ノート', icon: FileText },
+  { id: 'files', label: 'ファイル', icon: FileText },
   { id: 'graph', label: 'グラフ', icon: Network },
-  { id: 'chat', label: 'AIチャット', icon: MessageSquare },
+  { id: 'note', label: 'ノート', icon: BookOpen },
   { id: 'settings', label: '設定', icon: Settings },
 ];
 
