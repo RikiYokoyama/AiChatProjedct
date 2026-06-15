@@ -20,9 +20,6 @@ export default function EditorScreen({
   chatMode,
   chatModes,
   onChangeChatMode,
-  pendingPrompt,
-  onAddPrompt,
-  onRejectPrompt,
 }: {
   note: Note;
   content: string;
@@ -38,9 +35,6 @@ export default function EditorScreen({
   chatMode: string;
   chatModes: { id: string; label: string }[];
   onChangeChatMode: (mode: string) => void;
-  pendingPrompt: { name: string; instruction: string } | null;
-  onAddPrompt: () => void;
-  onRejectPrompt: () => void;
 }) {
   const [mode, setMode] = useState<'edit' | 'preview'>('preview');
   const [newTag, setNewTag] = useState('');
@@ -223,28 +217,6 @@ export default function EditorScreen({
 
       {/* AIチャット入力欄 */}
       <div className="shrink-0 border-t border-white/10 bg-[#0b1020] px-2 pb-2 pt-1.5">
-        {/* プロンプト追加確認バナー（チャット入力欄の上部に配置） */}
-        {pendingPrompt && (
-          <div className="mb-2 rounded-xl border border-violet-500/40 bg-violet-500/15 px-4 py-3">
-            <p className="mb-2 text-xs font-semibold text-violet-300">
-              「{pendingPrompt.name}」を追加しますか？
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={onAddPrompt}
-                className="flex-1 rounded-xl bg-violet-600 py-2 text-sm font-bold text-white active:bg-violet-500"
-              >
-                はい・追加する
-              </button>
-              <button
-                onClick={onRejectPrompt}
-                className="flex-1 rounded-xl bg-white/5 py-2 text-sm font-semibold text-gray-300 active:bg-white/10"
-              >
-                いいえ・修正する
-              </button>
-            </div>
-          </div>
-        )}
         {/* モードピッカー（展開時） */}
         {showModePicker && (
           <div className="mb-2 flex flex-wrap gap-1.5">

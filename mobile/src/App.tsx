@@ -72,6 +72,7 @@ export default function App() {
   const [gitStatus, setGitStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [gitMessage, setGitMessage] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<{ name: string; instruction: string } | null>(null);
+  const [promptLogFilename, setPromptLogFilename] = useState<string | null>(null);
 
   const selectedNote = useMemo(
     () => notes.find((n) => n.name === selectedName) ?? null,
@@ -183,10 +184,14 @@ export default function App() {
         aiModelMode,
         null,
         (chunk) => setStreamedText((prev) => prev + chunk),
-        (fullText) => {
-          setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+        async (fullText) => {
+          const fullHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
+          setChatHistory(fullHistory);
           setStreamedText('');
           setIsGenerating(false);
+          // 会話をMDファイルとして保存
+          const logFile = await savePromptLog(fullHistory, firstLine.slice(0, 20), null);
+          setPromptLogFilename(logFile);
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
             name: firstLine.slice(0, 10),
@@ -458,6 +463,38 @@ export default function App() {
     }
   }
 
+  // prompt-gen 会話をMarkdownファイルとして書き出す
+  function buildPromptLogMd(history: ChatMessage[], title: string): string {
+    const now = new Date().toLocaleString('ja-JP');
+    const lines: string[] = [
+      `# プロンプト作成ログ — ${title}`,
+      ``,
+      `作成日時: ${now}`,
+      `モード: プロンプト作成`,
+      `tags: [プロンプト作成, AI]`,
+      ``,
+      `## 会話ログ`,
+      ``,
+    ];
+    for (const msg of history) {
+      lines.push(msg.role === 'user' ? `**User:** ${msg.content}` : `**AI:** ${msg.content}`);
+      lines.push('');
+    }
+    return lines.join('\n');
+  }
+
+  async function savePromptLog(history: ChatMessage[], title: string, existingFilename?: string | null): Promise<string> {
+    const md = buildPromptLogMd(history, title);
+    let filename = existingFilename ?? null;
+    if (!filename) {
+      const safe = cleanFilename(`prompt-log_${title.slice(0, 20)}_${Date.now()}`);
+      filename = safe;
+    }
+    await writeNote(filename, md);
+    await refreshNotes();
+    return filename;
+  }
+
   // [PROMPT]...[/PROMPT] ブロックをパース（表記ゆれに対応）
   function parseGeneratedPrompt(text: string): { name: string; instruction: string } | null {
     // バッククォートや余分な記号を取り除いてからマッチ
@@ -487,7 +524,18 @@ export default function App() {
     };
     setConfig(next);
     await saveConfig(next);
+    // MDファイルに「追加済み」フッターを付けて上書き保存
+    if (promptLogFilename) {
+      try {
+        const firstUserMsg = chatHistory.find((m) => m.role === 'user')?.content ?? 'プロンプト作成';
+        const base = buildPromptLogMd(chatHistory, firstUserMsg.slice(0, 20));
+        const footer = `\n---\n✅ 追加済み: ${new Date().toLocaleString('ja-JP')}\nプロンプト名: ${pendingPrompt.name}\n`;
+        await writeNote(promptLogFilename, base + footer);
+        await refreshNotes();
+      } catch { /* ログ書き込み失敗は無視 */ }
+    }
     setPendingPrompt(null);
+    setPromptLogFilename(null);
   }
 
   // 「いいえ・修正する」専用送信 — handleAutoSave を呼ばず prompt-gen モード固定
@@ -495,22 +543,28 @@ export default function App() {
     if (!config.geminiApiKey) return;
     setPendingPrompt(null);
     const client = new GeminiClient(config.geminiApiKey);
-    const prompt = 'いいえ、修正してください。別のパターンで再度作成してください。';
-    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
+    const rejectMsg = 'いいえ、修正してください。別のパターンで再度作成してください。';
+    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: rejectMsg }];
     setChatHistory(nextHistory);
     setStreamedText('');
     setIsGenerating(true);
+    const currentLogFile = promptLogFilename;
 
     await client.chatStream(
       nextHistory,
-      getSystemPrompt('prompt-gen'), // 常に prompt-gen プロンプトで固定
+      getSystemPrompt('prompt-gen'),
       aiModelMode,
-      null, // ノートコンテキストなし（混在防止）
+      null,
       (chunk) => setStreamedText((prev) => prev + chunk),
-      (fullText) => {
-        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+      async (fullText) => {
+        const updatedHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
+        setChatHistory(updatedHistory);
         setStreamedText('');
         setIsGenerating(false);
+        // 同じMDファイルに会話を追記
+        const firstUserMsg = updatedHistory.find((m) => m.role === 'user')?.content ?? 'プロンプト作成';
+        const logFile = await savePromptLog(updatedHistory, firstUserMsg.slice(0, 20), currentLogFile);
+        if (!currentLogFile) setPromptLogFilename(logFile);
         // [PROMPT] ブロックを再検出（フォールバックあり）
         const parsed = parseGeneratedPrompt(fullText);
         setPendingPrompt(parsed ?? {
@@ -532,6 +586,10 @@ export default function App() {
       return;
     }
     setPendingPrompt(null);
+    // 新しい prompt-gen セッション開始時はログファイルをリセット
+    if (chatModeRef.current === 'prompt-gen' && chatHistory.length === 0) {
+      setPromptLogFilename(null);
+    }
     const client = new GeminiClient(config.geminiApiKey);
     const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
     setChatHistory(nextHistory);
@@ -556,10 +614,14 @@ export default function App() {
         if (currentMode !== 'prompt-gen') {
           handleAutoSave(prompt, fullText, contextName);
         }
-        // prompt-gen モードなら [PROMPT] ブロックを検出して確認待ちに
+        // prompt-gen モードなら会話をMD保存 → [PROMPT] ブロックを検出して確認待ちに
         if (currentMode === 'prompt-gen') {
+          const fullHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
+          const logTitle = prompt.slice(0, 20);
+          savePromptLog(fullHistory, logTitle, promptLogFilename).then((logFile) => {
+            setPromptLogFilename(logFile);
+          });
           const parsed = parseGeneratedPrompt(fullText);
-          // パースできなくてもフォールバック：テキスト全体をinstructionとして仮設定
           setPendingPrompt(parsed ?? {
             name: 'カスタム',
             instruction: fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim(),
@@ -645,9 +707,6 @@ export default function App() {
               chatMode={chatMode}
               chatModes={chatModes}
               onChangeChatMode={setChatMode}
-              pendingPrompt={pendingPrompt}
-              onAddPrompt={addPendingPrompt}
-              onRejectPrompt={rejectChat}
             />
           ) : (
             <FilesScreen
@@ -692,9 +751,6 @@ export default function App() {
             onSelectNote={selectNoteForNoteTab}
             onSend={sendChat}
             onWikiLinkClick={handleWikiLinkClick}
-            pendingPrompt={pendingPrompt}
-            onAddPrompt={addPendingPrompt}
-            onRejectPrompt={rejectChat}
             chatMode={chatMode}
             chatModes={chatModes}
             onChangeChatMode={setChatMode}
