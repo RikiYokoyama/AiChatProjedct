@@ -773,31 +773,6 @@ export default function App() {
         )}
       </main>
 
-      {/* プロンプト追加確認オーバーレイ（どのタブでも表示） */}
-      {pendingPrompt && (
-        <div className="fixed bottom-16 left-0 right-0 z-50 px-4 pb-2">
-          <div className="rounded-2xl border border-violet-500/40 bg-[#150d2a] px-4 py-4 shadow-2xl shadow-violet-900/40">
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-violet-400">
-              プロンプトを追加しますか？
-            </p>
-            <p className="mb-3 text-sm font-bold text-white">「{pendingPrompt.name}」</p>
-            <div className="flex gap-2">
-              <button
-                onClick={addPendingPrompt}
-                className="flex-1 rounded-xl bg-violet-600 py-2.5 text-sm font-bold text-white active:bg-violet-500"
-              >
-                はい・追加する
-              </button>
-              <button
-                onClick={rejectChat}
-                className="flex-1 rounded-xl bg-white/10 py-2.5 text-sm font-semibold text-gray-300 active:bg-white/15"
-              >
-                いいえ・修正する
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <BottomNav
         active={tab}
