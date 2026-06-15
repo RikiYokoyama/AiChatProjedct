@@ -740,14 +740,8 @@ export default function App() {
         {tab === 'settings' && (
           <SettingsScreen
             config={config}
-            aiModelMode={aiModelMode}
-            gitStatus={gitStatus}
-            gitMessage={gitMessage}
             onSave={handleSaveConfig}
-            onChangeModelMode={setAiModelMode}
-            onSync={() => runSync()}
             onDeletePrompt={handleDeletePrompt}
-            onEditPrompt={handleEditPrompt}
           />
         )}
       </main>
