@@ -123,7 +123,10 @@ export class GitHubSync {
       headers: { ...this.headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`GitHub push error ${res.status}: ${await res.text()}`);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`GitHub push error ${res.status} (repo: ${this.repo}, path: ${remotePath}): ${body}`);
+    }
   }
 
   // 新しいアーカイブ用パスを生成する (例: archive/YYYY-MM/name.md)
