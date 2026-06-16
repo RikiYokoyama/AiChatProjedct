@@ -37,8 +37,11 @@ export default function GraphScreen({
   const transformRef = useRef(transform);
   transformRef.current = transform;
 
+  const GLOBAL_NODE_LIMIT = 200;
+  const LOCAL_NODE_LIMIT = 50;
+
   // グラフデータ構築
-  const { nodes, edges } = useMemo(() => {
+  const { nodes, edges, totalNodeCount, isLimited } = useMemo(() => {
     const center = centerNoteName ? noteTitle(centerNoteName) : null;
     const nodeMap = new Map<string, GraphNode>();
     const edgeList: GraphEdge[] = [];
@@ -85,12 +88,29 @@ export default function GraphScreen({
         if (e.source === center) keep.add(e.target);
         if (e.target === center) keep.add(e.source);
       }
-      const filteredEdges = edgeList.filter((e) => keep.has(e.source) && keep.has(e.target));
-      const filteredNodes = Array.from(nodeMap.values()).filter((n) => keep.has(n.id));
-      return { nodes: filteredNodes, edges: filteredEdges };
+      let filteredNodes = Array.from(nodeMap.values()).filter((n) => keep.has(n.id));
+      const totalNodeCount = filteredNodes.length;
+      // 中心ノードを常に含めつつ、残りをdegree順に制限
+      if (filteredNodes.length > LOCAL_NODE_LIMIT) {
+        const centerNode = filteredNodes.find((n) => n.id === center);
+        const others = filteredNodes.filter((n) => n.id !== center).sort((a, b) => b.degree - a.degree).slice(0, LOCAL_NODE_LIMIT - 1);
+        filteredNodes = centerNode ? [centerNode, ...others] : others.slice(0, LOCAL_NODE_LIMIT);
+      }
+      const keepIds = new Set(filteredNodes.map((n) => n.id));
+      const filteredEdges = edgeList.filter((e) => keepIds.has(e.source) && keepIds.has(e.target));
+      return { nodes: filteredNodes, edges: filteredEdges, totalNodeCount, isLimited: totalNodeCount > LOCAL_NODE_LIMIT };
     }
 
-    return { nodes: Array.from(nodeMap.values()), edges: edgeList };
+    // 全体グラフ: degree（リンク数）降順 + 上位200件に制限
+    const allNodes = Array.from(nodeMap.values());
+    const totalNodeCount = allNodes.length;
+    let limitedNodes = allNodes;
+    if (allNodes.length > GLOBAL_NODE_LIMIT) {
+      limitedNodes = allNodes.sort((a, b) => b.degree - a.degree).slice(0, GLOBAL_NODE_LIMIT);
+    }
+    const keepIds = new Set(limitedNodes.map((n) => n.id));
+    const limitedEdges = edgeList.filter((e) => keepIds.has(e.source) && keepIds.has(e.target));
+    return { nodes: limitedNodes, edges: limitedEdges, totalNodeCount, isLimited: totalNodeCount > GLOBAL_NODE_LIMIT };
   }, [notes, centerNoteName]);
 
   const nodesRef = useRef(nodes);
@@ -342,9 +362,16 @@ export default function GraphScreen({
       <canvas ref={canvasRef} className="h-full w-full touch-none" />
       <div className="pointer-events-none absolute left-4 top-3 text-xs text-gray-500">
         {centerNoteName ? `ローカルグラフ: ${noteTitle(centerNoteName)}` : 'ナレッジグラフ'}
+        {' '}
+        <span className="text-gray-600">({nodes.length}{isLimited ? ` / ${totalNodeCount}件` : '件'})</span>
         <br />
         ドラッグ移動 / ピンチ拡大 / タップで開く
       </div>
+      {isLimited && (
+        <div className="pointer-events-none absolute left-4 top-12 right-12 rounded-lg bg-amber-900/60 border border-amber-500/30 px-3 py-1.5 text-[11px] text-amber-300">
+          ⚠️ {totalNodeCount}件中{nodes.length}件を表示（リンク数順）
+        </div>
+      )}
       {centerNoteName && onCloseLocal && (
         <button
           onClick={onCloseLocal}
