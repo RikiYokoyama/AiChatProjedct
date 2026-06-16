@@ -40,7 +40,7 @@ const defaultSettings = {
   showArrows: false,
   showLinks: false, // リンク線をデフォルトで非表示にする
   showLabels: true, // ファイル名（ラベル）表示
-  textFadeThreshold: 20,
+  textFadeThreshold: 1,
   nodeSize: 1.0,
   linkThickness: 1.0,
   nodeColor: '#a5b4fc', // デフォルトノード色
@@ -463,7 +463,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     // --- 2D標準の ForceAtlas2 WebWorker 物理エンジンの復活 ---
     let worker: any = null;
-    let animationFrameId2D: number;
 
     import('graphology-layout-forceatlas2/worker').then(({ default: FA2LayoutWorker }) => {
       if (!sigmaRef.current || viewMode !== '2D') return;
@@ -480,62 +479,31 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       });
 
       worker2DInstanceRef.current = worker;
-      let timer: any = null;
 
-      // 物理演算開始
+      // 物理演算開始（停止はautoStopWithFixで一元管理）
       if (!isPausedRef.current) {
         worker.start();
-
-        // 一定時間（3〜5秒）経過後に自動停止してCPU負荷を下げる
-        const autoStopDelay = nodesArray.length > 500 ? 3000 : 5000;
-        timer = setTimeout(() => {
-          if (worker && typeof worker.stop === 'function') {
-            worker.stop();
-          }
-        }, autoStopDelay);
       }
 
-      // 流動（ゆらぎ）モーション用の毎フレームのアニメーション制御
-      const animate2D = () => {
-        const now = Date.now();
-        let changed = false;
-
+      // ドラッグ固定ノードの座標を維持するためForceAtlas2停止後に1回だけ適用
+      const applyFixedNodes = () => {
         nodesArray.forEach((node) => {
           if (fixedNodes2D.current[node]) {
-            // 固定されたノードはドラッグ座標を厳密に維持
             subGraph.setNodeAttribute(node, 'x', fixedNodes2D.current[node].x);
             subGraph.setNodeAttribute(node, 'y', fixedNodes2D.current[node].y);
-          } else if (!isPausedRef.current) {
-            // 固定されていないノードは滑らかに浮遊ゆらぎ
-            let hash = 0;
-            for (let idx = 0; idx < node.length; idx++) {
-              hash = (hash << 5) - hash + node.charCodeAt(idx);
-            }
-            const offset = Math.abs(hash) % 1000;
-            const x = subGraph.getNodeAttribute(node, 'x') as number;
-            const y = subGraph.getNodeAttribute(node, 'y') as number;
-            
-            const jitterX = Math.sin((now * 0.0006) + offset) * 0.05;
-            const jitterY = Math.cos((now * 0.0006) + offset) * 0.05;
-            
-            subGraph.setNodeAttribute(node, 'x', x + jitterX);
-            subGraph.setNodeAttribute(node, 'y', y + jitterY);
-            changed = true;
           }
         });
-
-        // 揺らぎがある時のみリフレッシュ
-        if (changed && sigmaRef.current) {
-          sigmaRef.current.refresh();
-        }
-
-        animationFrameId2D = requestAnimationFrame(animate2D);
+        if (sigmaRef.current) sigmaRef.current.refresh();
       };
 
-      animate2D();
+      // ForceAtlas2停止後に固定座標を反映して静止
+      const autoStopWithFix = setTimeout(() => {
+        if (worker && typeof worker.stop === 'function') worker.stop();
+        applyFixedNodes();
+      }, (nodesArray.length > 500 ? 3000 : 5000) + 100);
 
       return () => {
-        if (timer) clearTimeout(timer);
+        clearTimeout(autoStopWithFix);
         if (worker) {
           worker.kill();
         }
@@ -628,7 +596,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     window.addEventListener('mouseup', handleMouseUp2D);
 
     return () => {
-      cancelAnimationFrame(animationFrameId2D);
       window.removeEventListener('mouseup', handleMouseUp2D);
       sigma.kill();
       sigmaRef.current = null;
