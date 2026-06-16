@@ -75,7 +75,6 @@ export default function App() {
   const [gitStatus, setGitStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [gitMessage, setGitMessage] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<{ name: string; instruction: string } | null>(null);
-  const [promptLogFilename, setPromptLogFilename] = useState<string | null>(null);
 
   const selectedNote = useMemo(
     () => notes.find((n) => n.name === selectedName) ?? null,
@@ -193,8 +192,6 @@ export default function App() {
           setStreamedText('');
           setIsGenerating(false);
           // 会話をMDファイルとして保存
-          const logFile = await savePromptLog(fullHistory, firstLine.slice(0, 20), null);
-          setPromptLogFilename(logFile);
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
             name: firstLine.slice(0, 10),
@@ -427,7 +424,6 @@ export default function App() {
     if (mode === 'prompt-gen' && chatMode !== 'prompt-gen') {
       setChatHistory([]);
       setFilesChatHistory([]);
-      setPromptLogFilename(null);
       setPendingPrompt(null);
     }
     setChatMode(mode);
@@ -480,37 +476,6 @@ export default function App() {
     }
   }
 
-  // prompt-gen 会話をMarkdownファイルとして書き出す
-  function buildPromptLogMd(history: ChatMessage[], title: string): string {
-    const now = new Date().toLocaleString('ja-JP');
-    const lines: string[] = [
-      `# プロンプト作成ログ — ${title}`,
-      ``,
-      `作成日時: ${now}`,
-      `モード: プロンプト作成`,
-      `tags: [プロンプト作成, AI]`,
-      ``,
-      `## 会話ログ`,
-      ``,
-    ];
-    for (const msg of history) {
-      lines.push(msg.role === 'user' ? `**User:** ${msg.content}` : `**AI:** ${msg.content}`);
-      lines.push('');
-    }
-    return lines.join('\n');
-  }
-
-  async function savePromptLog(history: ChatMessage[], title: string, existingFilename?: string | null): Promise<string> {
-    const md = buildPromptLogMd(history, title);
-    let filename = existingFilename ?? null;
-    if (!filename) {
-      const safe = cleanFilename(`prompt-log_${title.slice(0, 20)}_${Date.now()}`);
-      filename = safe;
-    }
-    await writeNote(filename, md);
-    await refreshNotes();
-    return filename;
-  }
 
   // [PROMPT]...[/PROMPT] ブロックをパース（表記ゆれに対応）
   function parseGeneratedPrompt(text: string): { name: string; instruction: string } | null {
@@ -541,18 +506,7 @@ export default function App() {
     };
     setConfig(next);
     await saveConfig(next);
-    // MDファイルに「追加済み」フッターを付けて上書き保存
-    if (promptLogFilename) {
-      try {
-        const firstUserMsg = chatHistory.find((m) => m.role === 'user')?.content ?? 'プロンプト作成';
-        const base = buildPromptLogMd(chatHistory, firstUserMsg.slice(0, 20));
-        const footer = `\n---\n✅ 追加済み: ${new Date().toLocaleString('ja-JP')}\nプロンプト名: ${pendingPrompt.name}\n`;
-        await writeNote(promptLogFilename, base + footer);
-        await refreshNotes();
-      } catch { /* ログ書き込み失敗は無視 */ }
-    }
     setPendingPrompt(null);
-    setPromptLogFilename(null);
   }
 
   // 「いいえ・チャットで調整する」— バナーを閉じるだけ（PC側と同じ仕様）
