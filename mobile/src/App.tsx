@@ -579,12 +579,9 @@ export default function App() {
     setStreamedText('');
     setIsGenerating(true);
 
-    // タブに応じて書き込み先ファイルを決定
-    const contextName = isPromptGen ? null : (isFilesTab ? selectedName : noteTabSelectedName);
-    const contextContent = isPromptGen ? null : (
-      isFilesTab ? contentRef.current :
-      noteTabSelectedName ? noteTabContentRef.current : null
-    );
+    // タブに応じて書き込み先ファイルを決定（全モード共通）
+    const contextName = isFilesTab ? selectedName : noteTabSelectedName;
+    const contextContent = isFilesTab ? contentRef.current : (noteTabSelectedName ? noteTabContentRef.current : null);
 
     await client.chatStream(
       nextHistory,
