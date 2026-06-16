@@ -597,10 +597,8 @@ export default function App() {
         setStreamedText('');
         setIsGenerating(false);
         const currentMode = chatModeRef.current;
-        // prompt-gen 以外のみ自動保存（prompt-gen はノートに追記不要）
-        if (currentMode !== 'prompt-gen') {
-          handleAutoSave(prompt, fullText, contextName);
-        }
+        // 全モードで開いているファイルに追記
+        handleAutoSave(prompt, fullText, contextName);
         // prompt-gen モードなら会話をMD保存 → [PROMPT] ブロックを検出して確認待ちに
         if (currentMode === 'prompt-gen') {
           const fullHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
