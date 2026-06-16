@@ -190,7 +190,9 @@ async function runGitSync() {
 
       try {
         const branches = await git.branch();
-        branchName = branches.current || 'main';
+        const raw = branches.current || '';
+        // "(no branch)" や "(HEAD detached ...)" などの不正な文字列を除外
+        branchName = /^[a-zA-Z0-9/_.-]+$/.test(raw) ? raw : 'main';
       } catch (err) {
         await git.checkoutLocalBranch('main');
         branchName = 'main';
@@ -203,7 +205,17 @@ async function runGitSync() {
         console.warn('Git pull failed, proceeding with push:', pullErr.message);
       }
 
-      await git.push('origin', branchName, { '--set-upstream': null });
+      try {
+        await git.push('origin', branchName, { '--set-upstream': null });
+      } catch (pushErr) {
+        // 新規リポジトリや main/master 不一致の場合は HEAD:main で強制プッシュ
+        if (pushErr.message.includes('rejected') || pushErr.message.includes('refspec') || pushErr.message.includes('failed to push')) {
+          console.warn('Push failed, retrying with HEAD:main --force:', pushErr.message);
+          await git.raw(['push', 'origin', 'HEAD:refs/heads/main', '--force']);
+        } else {
+          throw pushErr;
+        }
+      }
     }
 
     // 4. 同期完了後に archive/ の .md をルート直下へ復元 (Unpack)
