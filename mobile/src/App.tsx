@@ -61,7 +61,10 @@ export default function App() {
   const [archived, setArchived] = useState<string[]>([]);
   const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
 
+  // ノートタブ用チャット履歴
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  // ファイルタブ（EditorScreen）用チャット履歴（別管理）
+  const [filesChatHistory, setFilesChatHistory] = useState<ChatMessage[]>([]);
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatMode, setChatMode] = useState<string>('deep-think');
@@ -423,6 +426,7 @@ export default function App() {
   function handleChangeChatMode(mode: string) {
     if (mode === 'prompt-gen' && chatMode !== 'prompt-gen') {
       setChatHistory([]);
+      setFilesChatHistory([]);
       setPromptLogFilename(null);
       setPendingPrompt(null);
     }
@@ -471,6 +475,8 @@ export default function App() {
     } catch (err) {
       console.error('Auto save error:', err);
       setAutoSaveStatus('idle');
+      setGitStatus('error');
+      setGitMessage(`自動保存エラー: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -562,17 +568,21 @@ export default function App() {
     }
     setPendingPrompt(null);
     const isPromptGen = chatModeRef.current === 'prompt-gen';
-    // prompt-gen はノートコンテキストを渡さない（他モードの履歴はモード切替時にリセット済み）
+    const isFilesTab = tab === 'files';
     const client = new GeminiClient(config.geminiApiKey);
-    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
-    setChatHistory(nextHistory);
+
+    // タブごとに別の履歴を使用
+    const currentHistory = isFilesTab ? filesChatHistory : chatHistory;
+    const setCurrentHistory = isFilesTab ? setFilesChatHistory : setChatHistory;
+    const nextHistory: ChatMessage[] = [...currentHistory, { role: 'user', content: prompt }];
+    setCurrentHistory(nextHistory);
     setStreamedText('');
     setIsGenerating(true);
 
-    // ファイルタブで開いているファイルを優先、なければノートタブのファイル
-    const contextName = isPromptGen ? null : (selectedName ?? noteTabSelectedName);
+    // タブに応じて書き込み先ファイルを決定
+    const contextName = isPromptGen ? null : (isFilesTab ? selectedName : noteTabSelectedName);
     const contextContent = isPromptGen ? null : (
-      selectedName ? contentRef.current :
+      isFilesTab ? contentRef.current :
       noteTabSelectedName ? noteTabContentRef.current : null
     );
 
@@ -583,7 +593,7 @@ export default function App() {
       contextContent,
       (chunk) => setStreamedText((prev) => prev + chunk),
       (fullText) => {
-        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+        setCurrentHistory([...nextHistory, { role: 'model', content: fullText }]);
         setStreamedText('');
         setIsGenerating(false);
         const currentMode = chatModeRef.current;
@@ -681,6 +691,8 @@ export default function App() {
                 setTab('graph');
               }}
               onSend={sendChat}
+              chatHistory={filesChatHistory}
+              streamedText={streamedText}
               chatMode={chatMode}
               chatModes={chatModes}
               onChangeChatMode={handleChangeChatMode}

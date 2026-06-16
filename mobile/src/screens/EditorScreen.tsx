@@ -17,6 +17,8 @@ export default function EditorScreen({
   onAiAction,
   onOpenLocalGraph,
   onSend,
+  chatHistory,
+  streamedText,
   chatMode,
   chatModes,
   onChangeChatMode,
@@ -35,6 +37,8 @@ export default function EditorScreen({
   onAiAction: (action: 'title' | 'tags' | 'summary') => void;
   onOpenLocalGraph: () => void;
   onSend: (text: string) => void;
+  chatHistory: import('../lib/gemini').ChatMessage[];
+  streamedText: string;
   chatMode: string;
   chatModes: { id: string; label: string }[];
   onChangeChatMode: (mode: string) => void;
@@ -218,6 +222,25 @@ export default function EditorScreen({
           <ToolbarButton icon={<ListTree className="h-4 w-4" />} label="要約" onClick={() => onAiAction('summary')} />
           <div className="h-5 w-px shrink-0 bg-white/10" />
           <ToolbarButton icon={<Brackets className="h-4 w-4" />} label="[[リンク]]" onClick={wrapSelectionWithWikiLink} />
+        </div>
+      )}
+
+      {/* AIチャット履歴・ストリーミング表示 */}
+      {(chatHistory.length > 0 || streamedText) && (
+        <div className="max-h-40 overflow-y-auto border-t border-white/10 bg-[#080d1c] px-3 py-2 text-xs space-y-2">
+          {chatHistory.slice(-4).map((msg, i) => (
+            <div key={i} className={msg.role === 'user' ? 'text-gray-400' : 'text-indigo-300'}>
+              <span className="font-semibold mr-1">{msg.role === 'user' ? 'You:' : 'AI:'}</span>
+              <span className="whitespace-pre-wrap">{msg.content.slice(0, 200)}{msg.content.length > 200 ? '…' : ''}</span>
+            </div>
+          ))}
+          {streamedText && (
+            <div className="text-indigo-300">
+              <span className="font-semibold mr-1">AI:</span>
+              <span className="whitespace-pre-wrap">{streamedText.slice(-300)}</span>
+              <span className="animate-pulse">▋</span>
+            </div>
+          )}
         </div>
       )}
 
