@@ -192,11 +192,11 @@ export default function App() {
     if (!firstLine) return;
 
     const modeToUse = (aiMode ?? 'long-explain') as ChatMode;
+    setChatMode(modeToUse);
+    chatModeRef.current = modeToUse;
 
     // prompt-gen モード: ファイルを先に作成してエディタを開き、完了後に追記
     if (useAi && modeToUse === 'prompt-gen' && config.geminiApiKey) {
-      setChatMode('prompt-gen');
-      chatModeRef.current = 'prompt-gen';
       setPendingPrompt(null);
 
       // ファイルを先に作成して開く（他のモードと同様）
