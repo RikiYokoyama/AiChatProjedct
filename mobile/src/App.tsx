@@ -169,29 +169,47 @@ export default function App() {
 
     const modeToUse = (aiMode ?? 'long-explain') as ChatMode;
 
-    // prompt-gen モードはノート作成ではなくチャットとして扱う
+    // prompt-gen モード: ファイルを先に作成してエディタを開き、完了後に追記
     if (useAi && modeToUse === 'prompt-gen' && config.geminiApiKey) {
       setChatMode('prompt-gen');
       chatModeRef.current = 'prompt-gen';
       setPendingPrompt(null);
+
+      // ファイルを先に作成して開く（他のモードと同様）
+      let name = cleanFilename(firstLine);
+      let counter = 1;
+      while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+        name = cleanFilename(`${firstLine} (${counter++})`);
+      }
+      const initial = initialNoteContent(noteTitle(name));
+      await writeNote(name, initial);
+      await refreshNotes();
+      openNote(buildNote(name, initial));
+
       const client = new GeminiClient(config.geminiApiKey);
       const userPrompt = `「${firstLine}」というテーマ・用途に合ったカスタムプロンプトを作成してください。`;
       const nextHistory: ChatMessage[] = [{ role: 'user', content: userPrompt }];
-      setChatHistory(nextHistory);
+      setFilesChatHistory(nextHistory);
       setStreamedText('');
       setIsGenerating(true);
       await client.chatStream(
         nextHistory,
         SYSTEM_PROMPTS['prompt-gen'],
         aiModelMode,
-        null,
+        initial,
         (chunk) => setStreamedText((prev) => prev + chunk),
         async (fullText) => {
-          const fullHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
-          setChatHistory(fullHistory);
+          setFilesChatHistory([...nextHistory, { role: 'model', content: fullText }]);
           setStreamedText('');
           setIsGenerating(false);
-          // 会話をMDファイルとして保存
+          // [PROMPT]ブロックを除いた説明部分をファイルに追記
+          const cleanedText = fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim();
+          const block = `---\n\n## User\n\n${userPrompt.trim()}\n\n## AI\n\n${cleanedText}`;
+          const finalContent = `${initial.trimEnd()}\n\n${block}\n`;
+          setContent(finalContent);
+          await writeNote(name, finalContent);
+          await refreshNotes();
+          // プロンプト追加バナーを表示
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
             name: firstLine.slice(0, 10),
