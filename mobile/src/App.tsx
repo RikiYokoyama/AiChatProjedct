@@ -92,6 +92,15 @@ export default function App() {
   const noteTabContentRef = useRef(noteTabContent);
   noteTabContentRef.current = noteTabContent;
 
+  // stale closure対策: 常に最新のconfigとrunSyncを参照
+  const configRef = useRef<AppConfig>(config);
+  configRef.current = config;
+  const runSyncRef = useRef<(cfg?: AppConfig) => Promise<void>>(async () => {});
+
+  // 自動sync間隔（5分）
+  const lastAutoSyncRef = useRef<number>(0);
+  const MIN_AUTO_SYNC_MS = 5 * 60 * 1000;
+
   // ---------- 初期化 ----------
   useEffect(() => {
     (async () => {
@@ -112,6 +121,21 @@ export default function App() {
 
   const refreshNotes = useCallback(async () => {
     setNotes(await listNotes());
+  }, []);
+
+  // ---------- 自動同期（visibilitychange） ----------
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const cfg = configRef.current;
+      if (!cfg.autoSync || !cfg.gitRemoteUrl) return;
+      const now = Date.now();
+      if (now - lastAutoSyncRef.current < MIN_AUTO_SYNC_MS) return;
+      lastAutoSyncRef.current = now;
+      runSyncRef.current(cfg);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---------- ファイルタブのノート操作 ----------
@@ -603,6 +627,8 @@ export default function App() {
       setGitMessage(err instanceof Error ? err.message : String(err));
     }
   }
+  // 常に最新のrunSyncをrefに保持
+  runSyncRef.current = runSync;
 
   async function handleSaveConfig(next: AppConfig) {
     setConfig(next);
