@@ -36,6 +36,7 @@ function loadConfig() {
 
 function saveConfig(newConfig) {
   try {
+    const prevNotesPath = appConfig.notesPath;
     appConfig = { ...appConfig, ...newConfig };
 
     if (appConfig.notesPath && !fs.existsSync(appConfig.notesPath)) {
@@ -43,6 +44,12 @@ function saveConfig(newConfig) {
     }
 
     fs.writeFileSync(configFilePath, JSON.stringify(appConfig, null, 2), 'utf8');
+
+    // notesPathが変わったらファイル監視を再起動
+    if (appConfig.notesPath !== prevNotesPath) {
+      startFileWatcher(appConfig.notesPath);
+    }
+
     return { success: true };
   } catch (err) {
     console.error('Failed to save config:', err);
@@ -237,6 +244,68 @@ async function runGitSync() {
 }
 
 
+// ---------- 自動コミット（ファイル変更後30秒） ----------
+let fileWatcher = null;
+let commitDebounceTimer = null;
+let hasPendingCommit = false;
+
+async function autoCommit() {
+  const notesPath = appConfig.notesPath;
+  if (!notesPath || !fs.existsSync(notesPath) || !appConfig.gitRemoteUrl) return;
+  try {
+    const git = simpleGit(notesPath);
+    const isRepo = await git.checkIsRepo();
+    if (!isRepo) return;
+    packMarkdownFiles(notesPath);
+    await git.add('.');
+    const status = await git.status();
+    if (status.files.length > 0) {
+      await git.commit('Auto-commit: AI chat log');
+      hasPendingCommit = true;
+      console.log('Auto-committed locally');
+    }
+    unpackMarkdownFiles(notesPath);
+  } catch (err) {
+    console.error('Auto-commit failed:', err.message);
+    try { unpackMarkdownFiles(notesPath); } catch {}
+  }
+}
+
+function startFileWatcher(notesPath) {
+  if (fileWatcher) { fileWatcher.close(); fileWatcher = null; }
+  if (!notesPath || !fs.existsSync(notesPath)) return;
+  try {
+    fileWatcher = fs.watch(notesPath, { recursive: true }, (eventType, filename) => {
+      if (!filename) return;
+      const normalized = filename.replace(/\\/g, '/');
+      if (!normalized.endsWith('.md')) return;
+      if (normalized.startsWith('archive/') || normalized.startsWith('backup/')) return;
+      clearTimeout(commitDebounceTimer);
+      commitDebounceTimer = setTimeout(autoCommit, 30000);
+    });
+  } catch (err) {
+    console.error('Failed to start file watcher:', err.message);
+  }
+}
+
+// ---------- アプリ終了前にpush ----------
+let isQuitting = false;
+app.on('before-quit', async (event) => {
+  if (isQuitting || !appConfig.gitRemoteUrl) return;
+  if (!hasPendingCommit) return;
+  event.preventDefault();
+  isQuitting = true;
+  clearTimeout(commitDebounceTimer);
+  console.log('Running pre-quit sync...');
+  try {
+    await runGitSync();
+  } catch (err) {
+    console.error('Pre-quit sync failed:', err.message);
+  }
+  hasPendingCommit = false;
+  app.quit();
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -257,6 +326,7 @@ function createWindow() {
   });
 
   loadConfig();
+  startFileWatcher(appConfig.notesPath);
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
