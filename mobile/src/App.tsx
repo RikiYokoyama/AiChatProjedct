@@ -596,13 +596,8 @@ export default function App() {
         const currentMode = chatModeRef.current;
         // 全モードで開いているファイルに追記
         handleAutoSave(prompt, fullText, contextName);
-        // prompt-gen モードなら会話をMD保存 → [PROMPT] ブロックを検出して確認待ちに
+        // prompt-gen モードなら [PROMPT] ブロックを検出して確認待ちに
         if (currentMode === 'prompt-gen') {
-          const fullHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: fullText }];
-          const logTitle = prompt.slice(0, 20);
-          savePromptLog(fullHistory, logTitle, promptLogFilename).then((logFile) => {
-            setPromptLogFilename(logFile);
-          });
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
             name: 'カスタム',
