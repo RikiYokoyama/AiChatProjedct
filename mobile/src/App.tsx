@@ -403,22 +403,24 @@ export default function App() {
     }
 
     if (action === 'title') {
-      const newTitle = await generateNoteTitle(config.geminiApiKey, body.slice(0, 600), '');
-      if (!newTitle) return;
-      const newName = cleanFilename(newTitle);
-      if (notes.some((n) => n.name.toLowerCase() === newName.toLowerCase())) {
-        alert(`「${newTitle}」というファイルは既に存在します`);
-        return;
+      // 現在のタイトルと本文をAIに渡してより適切なタイトルを生成
+      const currentTitle = targetNote ? noteTitle(targetNote.name) : '';
+      const newTitle = await generateNoteTitle(config.geminiApiKey, currentTitle, body.slice(0, 600));
+      if (!newTitle || newTitle === currentTitle) return;
+      // 重複時は番号を付けて回避
+      let newName = cleanFilename(newTitle);
+      let counter = 1;
+      while (notes.some((n) => n.name.toLowerCase() === newName.toLowerCase() && n.name !== targetName)) {
+        newName = cleanFilename(`${newTitle} (${counter++})`);
       }
       await writeNote(newName, body);
       await removeNote(targetName);
       if (isNoteTab) {
         setNoteTabSelectedName(newName);
-        setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
       } else {
         setSelectedName(newName);
-        setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
       }
+      setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
       await refreshNotes();
       return;
     }
