@@ -195,25 +195,31 @@ export default function App() {
     setChatMode(modeToUse);
     chatModeRef.current = modeToUse;
 
-    // prompt-gen モード: ファイルを先に作成してエディタを開き、完了後に追記
-    if (useAi && modeToUse === 'prompt-gen' && config.geminiApiKey) {
-      setPendingPrompt(null);
+    // ファイル作成 → ノートタブに遷移（全モード共通）
+    let name = cleanFilename(firstLine);
+    let counter = 1;
+    while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+      name = cleanFilename(`${firstLine} (${counter++})`);
+    }
+    const initial = initialNoteContent(noteTitle(name));
+    await writeNote(name, initial);
+    await refreshNotes();
 
-      // ファイルを先に作成して開く（他のモードと同様）
-      let name = cleanFilename(firstLine);
-      let counter = 1;
-      while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
-        name = cleanFilename(`${firstLine} (${counter++})`);
-      }
-      const initial = initialNoteContent(noteTitle(name));
-      await writeNote(name, initial);
-      await refreshNotes();
-      openNote(buildNote(name, initial));
+    // ノートタブで開く
+    const newNote = buildNote(name, initial);
+    selectNoteForNoteTab(newNote);
+    setTab('note');
+    setChatHistory([]);
+    setPendingPrompt(null);
 
+    if (!useAi || !config.geminiApiKey) return;
+
+    // prompt-gen モード
+    if (modeToUse === 'prompt-gen') {
       const client = new GeminiClient(config.geminiApiKey);
       const userPrompt = `「${firstLine}」というテーマ・用途に合ったカスタムプロンプトを作成してください。`;
       const nextHistory: ChatMessage[] = [{ role: 'user', content: userPrompt }];
-      setFilesChatHistory(nextHistory);
+      setChatHistory(nextHistory);
       setStreamedText('');
       setIsGenerating(true);
       await client.chatStream(
@@ -223,21 +229,19 @@ export default function App() {
         initial,
         (chunk) => setStreamedText((prev) => prev + chunk),
         async (fullText) => {
-          setFilesChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+          setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
           setStreamedText('');
           setIsGenerating(false);
-          // [PROMPT]ブロックを除いた説明部分をファイルに追記
           const cleanedText = fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim();
           const block = `---\n\n## User\n\n${userPrompt.trim()}\n\n## AI\n\n${cleanedText}`;
           const finalContent = `${initial.trimEnd()}\n\n${block}\n`;
-          setContent(finalContent);
+          setNoteTabContent(finalContent);
           await writeNote(name, finalContent);
           await refreshNotes();
-          // プロンプト追加バナーを表示
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
             name: firstLine.slice(0, 10),
-            instruction: fullText.replace(/\[PROMPT\][\s\S]*?\[\/PROMPT\]/gi, '').trim(),
+            instruction: cleanedText,
           });
         },
         (err) => {
@@ -248,48 +252,37 @@ export default function App() {
       return;
     }
 
-    let name = cleanFilename(firstLine);
-    let counter = 1;
-    while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
-      name = cleanFilename(`${firstLine} (${counter++})`);
-    }
-    const initial = initialNoteContent(noteTitle(name));
-    await writeNote(name, initial);
-    await refreshNotes();
-    openNote(buildNote(name, initial));
-
-    if (useAi && config.geminiApiKey) {
-      setIsGenerating(true);
-      let acc = initial;
-      const client = new GeminiClient(config.geminiApiKey);
-      const systemPrompt = SYSTEM_PROMPTS[modeToUse] ?? SYSTEM_PROMPTS['long-explain'];
-      await client.chatStream(
-        [
-          {
-            role: 'user',
-            content: `「${noteTitle(name)}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。`,
-          },
-        ],
-        systemPrompt,
-        aiModelMode,
-        null,
-        (chunk) => {
-          acc += chunk;
-          setContent(acc);
+    // その他のAIモード
+    setIsGenerating(true);
+    let acc = initial;
+    const client = new GeminiClient(config.geminiApiKey);
+    const systemPrompt = SYSTEM_PROMPTS[modeToUse] ?? SYSTEM_PROMPTS['long-explain'];
+    await client.chatStream(
+      [
+        {
+          role: 'user',
+          content: `「${noteTitle(name)}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。`,
         },
-        async (fullText) => {
-          const finalContent = initial + fullText;
-          setContent(finalContent);
-          await writeNote(name, finalContent);
-          await refreshNotes();
-          setIsGenerating(false);
-        },
-        (err) => {
-          setIsGenerating(false);
-          alert(err instanceof Error ? err.message : String(err));
-        },
-      );
-    }
+      ],
+      systemPrompt,
+      aiModelMode,
+      null,
+      (chunk) => {
+        acc += chunk;
+        setNoteTabContent(acc);
+      },
+      async (fullText) => {
+        const finalContent = initial + fullText;
+        setNoteTabContent(finalContent);
+        await writeNote(name, finalContent);
+        await refreshNotes();
+        setIsGenerating(false);
+      },
+      (err) => {
+        setIsGenerating(false);
+        alert(err instanceof Error ? err.message : String(err));
+      },
+    );
   }
 
   // メモ作成（タイトルだけのシンプルノート）
