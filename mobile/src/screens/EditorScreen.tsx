@@ -46,7 +46,7 @@ export default function EditorScreen({
   onAddPrompt: () => void;
   onDismissPrompt: () => void;
 }) {
-  const [mode, setMode] = useState<'edit' | 'preview'>('edit');
+  const [mode, setMode] = useState<'edit' | 'preview'>('preview');
   const [newTag, setNewTag] = useState('');
   const [showTagInput, setShowTagInput] = useState(false);
   const [chatInput, setChatInput] = useState('');
