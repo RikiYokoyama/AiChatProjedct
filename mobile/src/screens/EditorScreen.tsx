@@ -217,7 +217,6 @@ export default function EditorScreen({
             onClick={() => (speech.isListening ? speech.stop() : speech.start())}
           />
           <div className="h-5 w-px shrink-0 bg-white/10" />
-          <ToolbarButton icon={<Sparkles className="h-4 w-4" />} label="タイトル生成" onClick={() => onAiAction('title')} />
           <ToolbarButton icon={<Tag className="h-4 w-4" />} label="タグ生成" onClick={() => onAiAction('tags')} />
           <ToolbarButton icon={<ListTree className="h-4 w-4" />} label="要約" onClick={() => onAiAction('summary')} />
           <div className="h-5 w-px shrink-0 bg-white/10" />

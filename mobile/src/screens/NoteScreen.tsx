@@ -224,17 +224,25 @@ export default function NoteScreen({
         </div>
       )}
 
-      {/* ── 編集ツールバー（編集モード時） ── */}
-      {selectedNote && editMode === 'edit' && (
+      {/* ── 編集ツールバー ── */}
+      {selectedNote && (
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 bg-[#0b1020] px-2 py-1.5" style={{ scrollbarWidth: 'none' }}>
-          <ToolbarButton icon={editorSpeech.isListening ? <MicOff className="h-4 w-4 text-red-400" /> : <Mic className="h-4 w-4" />} label={editorSpeech.isListening ? '停止' : '音声入力'} disabled={!editorSpeech.supported} onClick={() => editorSpeech.isListening ? editorSpeech.stop() : editorSpeech.start()} />
-          <div className="h-5 w-px shrink-0 bg-white/10" />
+          {editMode === 'edit' && (
+            <>
+              <ToolbarButton icon={editorSpeech.isListening ? <MicOff className="h-4 w-4 text-red-400" /> : <Mic className="h-4 w-4" />} label={editorSpeech.isListening ? '停止' : '音声入力'} disabled={!editorSpeech.supported} onClick={() => editorSpeech.isListening ? editorSpeech.stop() : editorSpeech.start()} />
+              <div className="h-5 w-px shrink-0 bg-white/10" />
+            </>
+          )}
           <ToolbarButton icon={<Zap className="h-4 w-4 text-yellow-400" />} label="タイトルから生成" onClick={generateFromTitle} disabled={isGenerating} />
           <div className="h-5 w-px shrink-0 bg-white/10" />
           <ToolbarButton icon={<Tag className="h-4 w-4" />} label="タグ生成" onClick={() => onAiAction('tags')} />
           <ToolbarButton icon={<ListTree className="h-4 w-4" />} label="要約" onClick={() => onAiAction('summary')} />
-          <div className="h-5 w-px shrink-0 bg-white/10" />
-          <ToolbarButton icon={<Brackets className="h-4 w-4" />} label="[[リンク]]" onClick={wrapSelectionWithWikiLink} />
+          {editMode === 'edit' && (
+            <>
+              <div className="h-5 w-px shrink-0 bg-white/10" />
+              <ToolbarButton icon={<Brackets className="h-4 w-4" />} label="[[リンク]]" onClick={wrapSelectionWithWikiLink} />
+            </>
+          )}
         </div>
       )}
 
