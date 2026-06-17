@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { BookOpen, ChevronDown, Check, Edit3, Eye, FileText, Loader2, Mic, MicOff, Search, Send, Sparkles, X } from 'lucide-react';
+import { BookOpen, Brackets, ChevronDown, Check, Edit3, Eye, FileText, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
 import { Note, noteTitle } from '../lib/notes';
 import MarkdownView from '../components/MarkdownView';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
@@ -21,6 +21,9 @@ export default function NoteScreen({
   chatMode,
   chatModes,
   onChangeChatMode,
+  onAiAction,
+  onAddTag,
+  onRemoveTag,
 }: {
   notes: Note[];
   selectedNote: Note | null;
@@ -37,17 +40,59 @@ export default function NoteScreen({
   chatMode: string;
   chatModes: { id: string; label: string }[];
   onChangeChatMode: (mode: string) => void;
+  onAiAction: (action: 'title' | 'tags' | 'summary') => void;
+  onAddTag: (tag: string) => void;
+  onRemoveTag: (tag: string) => void;
 }) {
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [showModePicker, setShowModePicker] = useState(false);
+  const [newTag, setNewTag] = useState('');
+  const [showTagInput, setShowTagInput] = useState(false);
   const keyboardInset = useKeyboardInset();
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  const editorSpeech = useSpeechInput((text) => {
+    insertAtCursor(text);
+  });
 
   const speech = useSpeechInput((text) => {
     setChatInput((prev) => prev + text);
   });
+
+  function insertAtCursor(text: string) {
+    const ta = editorRef.current;
+    if (!ta) { onChangeContent(content + text); return; }
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const next = content.slice(0, start) + text + content.slice(end);
+    onChangeContent(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(start + text.length, start + text.length);
+    });
+  }
+
+  function wrapSelectionWithWikiLink() {
+    const ta = editorRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    const selected = content.slice(start, end);
+    const next = content.slice(0, start) + `[[${selected}]]` + content.slice(end);
+    onChangeContent(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(start + 2, start + 2 + selected.length);
+    });
+  }
+
+  function generateFromTitle() {
+    if (!selectedNote || isGenerating) return;
+    onSend(noteTitle(selectedNote.name));
+  }
 
   // スワイプで編集/プレビュー切替
   const touchStartX = useRef(0);
@@ -132,6 +177,7 @@ export default function NoteScreen({
         {selectedNote ? (
           editMode === 'edit' ? (
             <textarea
+              ref={editorRef}
               className="h-full w-full resize-none bg-[#090d19] p-4 font-mono text-sm leading-7 text-white outline-none"
               value={content}
               onChange={(e) => onChangeContent(e.target.value)}
@@ -156,6 +202,42 @@ export default function NoteScreen({
           </div>
         )}
       </div>
+
+      {/* ── タグ表示（編集モード時） ── */}
+      {selectedNote && editMode === 'edit' && (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-white/5 px-4 py-2">
+          {selectedNote.tags.map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs text-emerald-300">
+              #{tag}
+              <button onClick={() => onRemoveTag(tag)} aria-label="タグ削除"><X className="h-3 w-3 text-emerald-400/60" /></button>
+            </span>
+          ))}
+          {showTagInput ? (
+            <form onSubmit={(e) => { e.preventDefault(); if (newTag.trim()) onAddTag(newTag.trim()); setNewTag(''); setShowTagInput(false); }} className="flex items-center gap-1">
+              <input autoFocus value={newTag} onChange={(e) => setNewTag(e.target.value)} onBlur={() => setShowTagInput(false)} placeholder="タグ名" className="h-7 w-28 rounded-full border border-white/10 bg-black/30 px-3 text-xs outline-none" />
+            </form>
+          ) : (
+            <button onClick={() => setShowTagInput(true)} className="flex h-6 w-6 items-center justify-center rounded-full bg-white/5 text-gray-400 active:bg-white/10" aria-label="タグ追加">
+              <Tag className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── 編集ツールバー（編集モード時） ── */}
+      {selectedNote && editMode === 'edit' && (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-white/10 bg-[#0b1020] px-2 py-1.5" style={{ scrollbarWidth: 'none' }}>
+          <ToolbarButton icon={editorSpeech.isListening ? <MicOff className="h-4 w-4 text-red-400" /> : <Mic className="h-4 w-4" />} label={editorSpeech.isListening ? '停止' : '音声入力'} disabled={!editorSpeech.supported} onClick={() => editorSpeech.isListening ? editorSpeech.stop() : editorSpeech.start()} />
+          <div className="h-5 w-px shrink-0 bg-white/10" />
+          <ToolbarButton icon={<Zap className="h-4 w-4 text-yellow-400" />} label="タイトルから生成" onClick={generateFromTitle} disabled={isGenerating} />
+          <div className="h-5 w-px shrink-0 bg-white/10" />
+          <ToolbarButton icon={<Sparkles className="h-4 w-4" />} label="タイトル生成" onClick={() => onAiAction('title')} />
+          <ToolbarButton icon={<Tag className="h-4 w-4" />} label="タグ生成" onClick={() => onAiAction('tags')} />
+          <ToolbarButton icon={<ListTree className="h-4 w-4" />} label="要約" onClick={() => onAiAction('summary')} />
+          <div className="h-5 w-px shrink-0 bg-white/10" />
+          <ToolbarButton icon={<Brackets className="h-4 w-4" />} label="[[リンク]]" onClick={wrapSelectionWithWikiLink} />
+        </div>
+      )}
 
       {/* ── AIチャット入力欄 ── */}
       <div className="shrink-0 border-t border-white/10 bg-[#0b1020] px-2 pb-2 pt-1.5">
@@ -312,5 +394,13 @@ export default function NoteScreen({
         </>
       )}
     </div>
+  );
+}
+
+function ToolbarButton({ icon, label, onClick, disabled }: { icon: React.ReactNode; label: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button onClick={onClick} disabled={disabled} className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 text-xs text-gray-300 active:bg-white/15 disabled:opacity-40">
+      {icon}{label}
+    </button>
   );
 }

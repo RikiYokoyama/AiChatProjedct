@@ -730,6 +730,9 @@ export default function App() {
             chatMode={chatMode}
             chatModes={chatModes}
             onChangeChatMode={handleChangeChatMode}
+            onAiAction={handleAiAction}
+            onAddTag={(tag) => noteTabSelectedNote && updateTags(noteTabSelectedNote.name, noteTabContent, Array.from(new Set([...(noteTabSelectedNote.tags ?? []), tag.replace(/^#/, '')])))}
+            onRemoveTag={(tag) => noteTabSelectedNote && updateTags(noteTabSelectedNote.name, noteTabContent, (noteTabSelectedNote.tags ?? []).filter((t) => t !== tag))}
           />
         )}
 
