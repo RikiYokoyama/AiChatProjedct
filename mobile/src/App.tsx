@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import BottomNav, { Tab } from './components/BottomNav';
 import FilesScreen from './screens/NotesScreen';
-import EditorScreen from './screens/EditorScreen';
 import NoteScreen from './screens/NoteScreen';
 import GraphScreen from './screens/GraphScreen';
 import SettingsScreen from './screens/SettingsScreen';
@@ -47,12 +46,7 @@ export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
 
-  // ファイルタブ用
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [content, setContent] = useState('');
-  const [showEditor, setShowEditor] = useState(false);
-
-  // ノートタブ（NoteScreen）用 — 別のファイル選択を持つ
+  // ノートタブ（NoteScreen）用
   const [noteTabSelectedName, setNoteTabSelectedName] = useState<string | null>(null);
   const [noteTabContent, setNoteTabContent] = useState('');
 
@@ -61,10 +55,7 @@ export default function App() {
   const [archived, setArchived] = useState<string[]>([]);
   const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
 
-  // ノートタブ用チャット履歴
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  // ファイルタブ（EditorScreen）用チャット履歴（別管理）
-  const [filesChatHistory, setFilesChatHistory] = useState<ChatMessage[]>([]);
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatMode, setChatMode] = useState<string>('deep-think');
@@ -76,18 +67,10 @@ export default function App() {
   const [gitMessage, setGitMessage] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<{ name: string; instruction: string } | null>(null);
 
-  const selectedNote = useMemo(
-    () => notes.find((n) => n.name === selectedName) ?? null,
-    [notes, selectedName],
-  );
-
   const noteTabSelectedNote = useMemo(
     () => notes.find((n) => n.name === noteTabSelectedName) ?? null,
     [notes, noteTabSelectedName],
   );
-
-  const contentRef = useRef(content);
-  contentRef.current = content;
 
   const noteTabContentRef = useRef(noteTabContent);
   noteTabContentRef.current = noteTabContent;
@@ -137,33 +120,6 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // ---------- ファイルタブのノート操作 ----------
-  const openNote = useCallback(
-    (note: Note) => {
-      if (selectedName && selectedName !== note.name) {
-        setChatHistory([]);
-        setStreamedText('');
-      }
-      setSelectedName(note.name);
-      setContent(note.content);
-      setShowEditor(true);
-      setRecentNames((prev) => [note.name, ...prev.filter((n) => n !== note.name)].slice(0, 10));
-    },
-    [selectedName],
-  );
-
-  // ファイルタブ 自動保存（編集後1.2秒）
-  useEffect(() => {
-    if (!selectedName || !showEditor) return;
-    const timer = setTimeout(async () => {
-      await writeNote(selectedName, contentRef.current);
-      setNotes((prev) =>
-        prev.map((n) => (n.name === selectedName ? buildNote(n.name, contentRef.current) : n)),
-      );
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [content, selectedName, showEditor]);
 
   // ノートタブ 自動保存
   useEffect(() => {
@@ -298,17 +254,13 @@ export default function App() {
     const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
     await writeNote(name, initial);
     await refreshNotes();
-    openNote(buildNote(name, initial));
+    selectNoteForNoteTab(buildNote(name, initial));
+    setTab('note');
   }
 
   async function deleteNoteAction(note: Note) {
     if (!window.confirm(`「${noteTitle(note.name)}」を削除しますか？`)) return;
     await removeNote(note.name);
-    if (selectedName === note.name) {
-      setSelectedName(null);
-      setContent('');
-      setShowEditor(false);
-    }
     if (noteTabSelectedName === note.name) {
       setNoteTabSelectedName(null);
       setNoteTabContent('');
@@ -352,8 +304,8 @@ export default function App() {
       const filename = name.endsWith('.md') ? name : `${name}.md`;
       const target = notes.find((n) => n.name.toLowerCase() === filename.toLowerCase());
       if (target) {
-        openNote(target);
-        setTab('files');
+        selectNoteForNoteTab(target);
+        setTab('note');
         return;
       }
       if (!window.confirm(`ファイル「${name}」は存在しません。新しく作成しますか？`)) return;
@@ -361,16 +313,15 @@ export default function App() {
       const initial = initialNoteContent(noteTitle(clean));
       await writeNote(clean, initial);
       await refreshNotes();
-      openNote(buildNote(clean, initial));
-      setTab('files');
+      selectNoteForNoteTab(buildNote(clean, initial));
+      setTab('note');
     },
-    [notes, openNote, refreshNotes],
+    [notes, selectNoteForNoteTab, refreshNotes],
   );
 
   // ---------- タグ ----------
   async function updateTags(name: string, currentContent: string, nextTags: string[]) {
     const nextContent = applyTagsToContent(currentContent, nextTags);
-    if (name === selectedName) setContent(nextContent);
     if (name === noteTabSelectedName) setNoteTabContent(nextContent);
     await writeNote(name, nextContent);
     await refreshNotes();
@@ -383,12 +334,10 @@ export default function App() {
       return;
     }
 
-    // タブに応じて対象ファイルとコンテンツを切り替え
-    const isNoteTab = tab === 'note';
-    const targetName = isNoteTab ? noteTabSelectedName : selectedName;
-    const targetNote = isNoteTab ? noteTabSelectedNote : selectedNote;
-    const body = isNoteTab ? noteTabContentRef.current : contentRef.current;
-    const setTargetContent = isNoteTab ? setNoteTabContent : setContent;
+    const targetName = noteTabSelectedName;
+    const targetNote = noteTabSelectedNote;
+    const body = noteTabContentRef.current;
+    const setTargetContent = setNoteTabContent;
 
     if (!targetName) return;
 
@@ -415,11 +364,7 @@ export default function App() {
       }
       await writeNote(newName, body);
       await removeNote(targetName);
-      if (isNoteTab) {
-        setNoteTabSelectedName(newName);
-      } else {
-        setSelectedName(newName);
-      }
+      setNoteTabSelectedName(newName);
       setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
       await refreshNotes();
       return;
@@ -464,7 +409,6 @@ export default function App() {
   function handleChangeChatMode(mode: string) {
     if (mode === 'prompt-gen' && chatMode !== 'prompt-gen') {
       setChatHistory([]);
-      setFilesChatHistory([]);
       setPendingPrompt(null);
     }
     setChatMode(mode);
@@ -486,14 +430,12 @@ export default function App() {
       // 対象ファイルが開かれている場合はそこに追記
       const targetName = contextName;
       if (targetName) {
-        const base = targetName === selectedName ? contentRef.current
-                   : targetName === noteTabSelectedName ? noteTabContentRef.current
+        const base = targetName === noteTabSelectedName ? noteTabContentRef.current
                    : notes.find((n) => n.name === targetName)?.content ?? '';
         const currentNote = notes.find((n) => n.name === targetName);
         const currentTags = currentNote?.tags ?? [];
         const nextTags = Array.from(new Set([...currentTags, ...extracted]));
         const appended = applyTagsToContent(`${base.trimEnd()}\n\n${block}\n`, nextTags);
-        if (targetName === selectedName) setContent(appended);
         if (targetName === noteTabSelectedName) setNoteTabContent(appended);
         await writeNote(targetName, appended);
       } else {
@@ -562,21 +504,15 @@ export default function App() {
       return;
     }
     setPendingPrompt(null);
-    const isPromptGen = chatModeRef.current === 'prompt-gen';
-    const isFilesTab = tab === 'files';
     const client = new GeminiClient(config.geminiApiKey);
 
-    // タブごとに別の履歴を使用
-    const currentHistory = isFilesTab ? filesChatHistory : chatHistory;
-    const setCurrentHistory = isFilesTab ? setFilesChatHistory : setChatHistory;
-    const nextHistory: ChatMessage[] = [...currentHistory, { role: 'user', content: prompt }];
-    setCurrentHistory(nextHistory);
+    const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
+    setChatHistory(nextHistory);
     setStreamedText('');
     setIsGenerating(true);
 
-    // タブに応じて書き込み先ファイルを決定（全モード共通）
-    const contextName = isFilesTab ? selectedName : noteTabSelectedName;
-    const contextContent = isFilesTab ? contentRef.current : (noteTabSelectedName ? noteTabContentRef.current : null);
+    const contextName = noteTabSelectedName;
+    const contextContent = noteTabSelectedName ? noteTabContentRef.current : null;
 
     await client.chatStream(
       nextHistory,
@@ -585,7 +521,7 @@ export default function App() {
       contextContent,
       (chunk) => setStreamedText((prev) => prev + chunk),
       (fullText) => {
-        setCurrentHistory([...nextHistory, { role: 'model', content: fullText }]);
+        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
         setStreamedText('');
         setIsGenerating(false);
         const currentMode = chatModeRef.current;
@@ -657,53 +593,23 @@ export default function App() {
       <main className="min-h-0 flex-1 bg-[#070a13]">
 
         {/* ファイルタブ */}
-        {tab === 'files' &&
-          (showEditor && selectedNote ? (
-            <EditorScreen
-              note={selectedNote}
-              content={content}
-              isGenerating={isGenerating}
-              onChangeContent={setContent}
-              onBack={() => setShowEditor(false)}
-              onWikiLinkClick={handleWikiLinkClick}
-              onAddTag={(tag) =>
-                updateTags(selectedNote.name, content, Array.from(new Set([...(selectedNote.tags ?? []), tag.replace(/^#/, '')])))
-              }
-              onRemoveTag={(tag) =>
-                updateTags(selectedNote.name, content, (selectedNote.tags ?? []).filter((t) => t !== tag))
-              }
-              onAiAction={handleAiAction}
-              onOpenLocalGraph={() => {
-                setLocalGraphTarget(selectedNote.name);
-                setTab('graph');
-              }}
-              onSend={sendChat}
-              chatHistory={filesChatHistory}
-              streamedText={streamedText}
-              chatMode={chatMode}
-              chatModes={chatModes}
-              onChangeChatMode={handleChangeChatMode}
-              pendingPrompt={pendingPrompt}
-              onAddPrompt={addPendingPrompt}
-              onDismissPrompt={dismissPendingPrompt}
-            />
-          ) : (
-            <FilesScreen
-              notes={notes}
-              recentNames={recentNames}
-              favorites={favorites}
-              archived={archived}
-              selectedName={selectedName}
-              chatModes={chatModes}
-              onOpen={openNote}
-              onCreate={createNote}
-              onCreateMemo={createMemo}
-              onDelete={deleteNoteAction}
-              onArchive={toggleArchive}
-              onShare={shareNote}
-              onToggleFavorite={toggleFavorite}
-            />
-          ))}
+        {tab === 'files' && (
+          <FilesScreen
+            notes={notes}
+            recentNames={recentNames}
+            favorites={favorites}
+            archived={archived}
+            selectedName={noteTabSelectedName}
+            chatModes={chatModes}
+            onOpen={(note) => { selectNoteForNoteTab(note); setTab('note'); }}
+            onCreate={createNote}
+            onCreateMemo={createMemo}
+            onDelete={deleteNoteAction}
+            onArchive={toggleArchive}
+            onShare={shareNote}
+            onToggleFavorite={toggleFavorite}
+          />
+        )}
 
         {/* グラフタブ */}
         {tab === 'graph' && (
@@ -759,7 +665,6 @@ export default function App() {
       <BottomNav
         active={tab}
         onChange={(t) => {
-          if (t === 'files' && tab === 'files') setShowEditor(false);
           if (t !== 'graph') setLocalGraphTarget(null);
           setTab(t);
         }}
