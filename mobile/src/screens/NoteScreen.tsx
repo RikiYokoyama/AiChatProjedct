@@ -38,7 +38,7 @@ export default function NoteScreen({
   chatModes: { id: string; label: string }[];
   onChangeChatMode: (mode: string) => void;
 }) {
-  const [editMode, setEditMode] = useState<'edit' | 'preview'>('edit');
+  const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [chatInput, setChatInput] = useState('');
