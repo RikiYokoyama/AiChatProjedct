@@ -256,7 +256,7 @@ export default function App() {
     setIsGenerating(true);
     let acc = initial;
     const client = new GeminiClient(config.geminiApiKey);
-    const systemPrompt = SYSTEM_PROMPTS[modeToUse] ?? SYSTEM_PROMPTS['long-explain'];
+    const systemPrompt = getSystemPrompt(modeToUse);
     await client.chatStream(
       [
         {
