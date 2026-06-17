@@ -17,6 +17,7 @@ import {
   Settings,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   DndContext,
@@ -632,6 +633,17 @@ export default function App() {
         setNoteContext(finalContent);
         await window.electronAPI.saveNote({ filename: name, content: finalContent });
         await loadNotesList();
+
+        // 初期生成文章からプロンプトブロックを検出して保留登録する
+        const promptBlockRegex = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/i;
+        const promptMatch = promptBlockRegex.exec(fullText);
+        if (promptMatch) {
+          const pName = promptMatch[1].trim();
+          const pPromptText = promptMatch[2].trim();
+          if (pName && pPromptText) {
+            setPendingPrompt({ name: pName, prompt: pPromptText });
+          }
+        }
       },
       (error) => {
         setIsGenerating(false);
@@ -875,17 +887,6 @@ export default function App() {
       // 会話からタグを自動生成
       const extracted = await generateNoteTags(config.geminiApiKey, userPrompt, aiReply);
 
-      // AIの返答から [PROMPT] ブロックを検出
-      const promptBlockRegex = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/i;
-      const promptMatch = promptBlockRegex.exec(aiReply);
-      if (promptMatch) {
-        const name = promptMatch[1].trim();
-        const promptText = promptMatch[2].trim();
-        if (name && promptText) {
-          setPendingPrompt({ name, prompt: promptText });
-        }
-      }
-
       if (selectedNote) {
         const currentTags = selectedNote.tags || [];
         const nextTags = Array.from(new Set([...currentTags, ...extracted]));
@@ -913,6 +914,27 @@ export default function App() {
         setContent(finalContent);
         setNoteContext(finalContent);
         setSelectedNote(prev => prev ? { ...prev, tags: nextTags, content: finalContent } : null);
+
+        // 最新のノート本文全体から [PROMPT] をスキャンして保留登録する
+        const promptBlockRegexGlobal = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/gi;
+        let match;
+        let detectedPrompt: { name: string; prompt: string } | null = null;
+        while ((match = promptBlockRegexGlobal.exec(finalContent)) !== null) {
+          const pName = match[1].trim();
+          const pPromptText = match[2].trim();
+          if (pName && pPromptText) {
+            const exists = (config.customPrompts || []).some(
+              (cp) => cp.name.toLowerCase() === pName.toLowerCase() && cp.prompt === pPromptText
+            );
+            if (!exists) {
+              detectedPrompt = { name: pName, prompt: pPromptText };
+              break;
+            }
+          }
+        }
+        if (detectedPrompt) {
+          setPendingPrompt(detectedPrompt);
+        }
       } else {
         const title = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
         const filename = cleanFilename(title);
@@ -925,6 +947,27 @@ export default function App() {
           setContent(fullContent);
           setNoteContext(fullContent);
           setOpenTabs((prev) => (prev.some((t) => t.name === filename) ? prev : [...prev, note]));
+
+          // 新規自動保存ノート全体から [PROMPT] をスキャンして保留登録する
+          const promptBlockRegexGlobal = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/gi;
+          let match;
+          let detectedPrompt: { name: string; prompt: string } | null = null;
+          while ((match = promptBlockRegexGlobal.exec(fullContent)) !== null) {
+            const pName = match[1].trim();
+            const pPromptText = match[2].trim();
+            if (pName && pPromptText) {
+              const exists = (config.customPrompts || []).some(
+                (cp) => cp.name.toLowerCase() === pName.toLowerCase() && cp.prompt === pPromptText
+              );
+              if (!exists) {
+                detectedPrompt = { name: pName, prompt: pPromptText };
+                break;
+              }
+            }
+          }
+          if (detectedPrompt) {
+            setPendingPrompt(detectedPrompt);
+          }
         }
       }
       await loadNotesList();
@@ -936,8 +979,8 @@ export default function App() {
     }
   }
 
-  async function sendChat() {
-    const prompt = chatInput.trim();
+  async function sendChat(overridePrompt?: string) {
+    const prompt = (overridePrompt ?? chatInput).trim();
     if (!prompt || isGenerating) return;
     const client = new GeminiClient(config.geminiApiKey);
     const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
@@ -1630,6 +1673,24 @@ export default function App() {
                   </span>
                 )}
               </div>
+
+              {/* タイトルから生成ボタン */}
+              {selectedNote && (
+                <div className="mb-2">
+                  <button
+                    type="button"
+                    disabled={isGenerating}
+                    onClick={() => {
+                      const title = selectedNote.name.replace(/\.md$/i, '');
+                      sendChat(title);
+                    }}
+                    className="flex items-center gap-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 px-3 py-1.5 text-xs text-yellow-300 hover:bg-yellow-500/20 disabled:opacity-40 transition-colors"
+                  >
+                    <Zap className="h-3.5 w-3.5 text-yellow-400" />
+                    タイトルから生成
+                  </button>
+                </div>
+              )}
 
               {/* チャット入力フォーム */}
               <form
