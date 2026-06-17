@@ -376,20 +376,27 @@ export default function App() {
     await refreshNotes();
   }
 
-  // ---------- クイックAIアクション (EditorScreen用) ----------
+  // ---------- クイックAIアクション (EditorScreen / NoteScreen 共通) ----------
   async function handleAiAction(action: 'title' | 'tags' | 'summary') {
     if (!config.geminiApiKey) {
       alert('設定画面でGemini APIキーを入力してください');
       return;
     }
-    if (!selectedName) return;
-    const body = contentRef.current;
+
+    // タブに応じて対象ファイルとコンテンツを切り替え
+    const isNoteTab = tab === 'note';
+    const targetName = isNoteTab ? noteTabSelectedName : selectedName;
+    const targetNote = isNoteTab ? noteTabSelectedNote : selectedNote;
+    const body = isNoteTab ? noteTabContentRef.current : contentRef.current;
+    const setTargetContent = isNoteTab ? setNoteTabContent : setContent;
+
+    if (!targetName) return;
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
       const tags = await generateNoteTags(config.geminiApiKey, body.slice(0, 600), '');
-      const current = selectedNote?.tags ?? [];
-      await updateTags(selectedName, body, Array.from(new Set([...current, ...tags])));
+      const current = targetNote?.tags ?? [];
+      await updateTags(targetName, body, Array.from(new Set([...current, ...tags])));
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 1500);
       return;
@@ -404,9 +411,14 @@ export default function App() {
         return;
       }
       await writeNote(newName, body);
-      await removeNote(selectedName);
-      setSelectedName(newName);
-      setRecentNames((prev) => [newName, ...prev.filter((n) => n !== selectedName)]);
+      await removeNote(targetName);
+      if (isNoteTab) {
+        setNoteTabSelectedName(newName);
+        setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
+      } else {
+        setSelectedName(newName);
+        setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
+      }
       await refreshNotes();
       return;
     }
@@ -415,23 +427,15 @@ export default function App() {
     setIsGenerating(true);
     const client = new GeminiClient(config.geminiApiKey);
     let acc = body + '\n\n## 要約\n\n';
-    setContent(acc);
+    setTargetContent(acc);
     await client.chatStream(
-      [
-        {
-          role: 'user',
-          content: `以下のノートを3〜5行で簡潔に要約してください。要約本文のみを出力してください。\n\n${body.slice(0, 8000)}`,
-        },
-      ],
+      [{ role: 'user', content: `以下のノートを3〜5行で簡潔に要約してください。要約本文のみを出力してください。\n\n${body.slice(0, 8000)}` }],
       SYSTEM_PROMPTS['markdown-struct'],
       aiModelMode,
       null,
-      (chunk) => {
-        acc += chunk;
-        setContent(acc);
-      },
+      (chunk) => { acc += chunk; setTargetContent(acc); },
       async () => {
-        await writeNote(selectedName, acc);
+        await writeNote(targetName, acc);
         await refreshNotes();
         setIsGenerating(false);
       },
