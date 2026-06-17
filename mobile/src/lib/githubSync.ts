@@ -111,6 +111,23 @@ export class GitHubSync {
     return { name, path: remotePath, sha: data.sha, content: decodeBase64Utf8(data.content) };
   }
 
+  private async deleteFile(remotePath: string, sha: string): Promise<void> {
+    const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
+    const res = await fetch(`${API}/repos/${this.repo}/contents/${encodedPath}`, {
+      method: 'DELETE',
+      headers: { ...this.headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `sync: delete ${remotePath} from mobile`,
+        sha,
+        branch: this.branch,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`GitHub delete error ${res.status} (path: ${remotePath}): ${body}`);
+    }
+  }
+
   private async putFile(remotePath: string, content: string, sha?: string): Promise<void> {
     const body: Record<string, unknown> = {
       message: `sync: update ${remotePath} from mobile`,
@@ -215,18 +232,28 @@ export class GitHubSync {
       }
     }
 
-    // 2. リモートにだけ新しく追加されたノートの処理
+    // 2. リモートにあってローカルにないファイルの処理
     for (const remote of remoteList) {
       if (localMap.has(remote.name)) continue;
-      
-      const remoteFile = await this.fetchRemoteFile(remote.path);
-      await writeNote(remote.name, remoteFile.content);
-      state.baseHashes[remote.name] = await sha256(remoteFile.content);
-      state.remotePaths[remote.name] = remote.path;
-      result.pulled.push(remote.name);
+
+      if (state.baseHashes[remote.name]) {
+        // 前回同期済み → ローカルで削除されたのでGitHubからも削除
+        const remoteFile = await this.fetchRemoteFile(remote.path);
+        await this.deleteFile(remote.path, remoteFile.sha);
+        delete state.baseHashes[remote.name];
+        delete state.remotePaths[remote.name];
+        result.pushed.push(`(deleted) ${remote.name}`);
+      } else {
+        // 前回未同期 → リモートの新着ファイルをローカルにpull
+        const remoteFile = await this.fetchRemoteFile(remote.path);
+        await writeNote(remote.name, remoteFile.content);
+        state.baseHashes[remote.name] = await sha256(remoteFile.content);
+        state.remotePaths[remote.name] = remote.path;
+        result.pulled.push(remote.name);
+      }
     }
 
-    // 保存状態のクリーンアップ (ローカルで削除されたファイルの削除など)
+    // 保存状態のクリーンアップ（ローカル・リモート双方から消えたファイル）
     const activeNames = new Set(localNotes.map(n => n.name));
     for (const key in state.baseHashes) {
       if (!activeNames.has(key) && !remoteMap.has(key)) {
