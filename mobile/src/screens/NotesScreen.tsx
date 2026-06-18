@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Archive, FileText, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
-import { Note, noteTitle } from '../lib/notes';
+import { Note, isEmptyNote, noteTitle } from '../lib/notes';
 import SwipeableNoteRow from '../components/SwipeableNoteRow';
 import Fab from '../components/Fab';
 import CreateModal from '../components/CreateModal';
@@ -154,6 +154,7 @@ export default function FilesScreen({
               note={note}
               isActive={selectedName === note.name}
               isFavorite={favorites.includes(note.name)}
+              isEmpty={isEmptyNote(note.content)}
               onOpen={() => onOpen(note)}
               onDelete={() => onDelete(note)}
               onArchive={() => onArchive(note)}

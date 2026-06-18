@@ -76,6 +76,19 @@ function cleanFilename(value: string) {
   return name.endsWith('.md') ? name : `${name || 'Untitled'}.md`;
 }
 
+function isEmptyNote(content: string): boolean {
+  const meaningful = content.split('\n').filter((l) => {
+    const t = l.trim();
+    return (
+      t !== '' &&
+      !t.startsWith('#') &&
+      !/^作成日時[:：]/i.test(t) &&
+      !/^(タグ|tags?)[:：]/i.test(t)
+    );
+  });
+  return meaningful.length === 0;
+}
+
 function RibbonButton({
   icon,
   active,
@@ -1381,25 +1394,29 @@ export default function App() {
                 {isLoading ? (
                   <div className="p-4 text-sm text-gray-400">読み込み中...</div>
                 ) : (
-                  filteredNotes.map((note) => (
-                    <button
-                      key={note.name}
-                      className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${selectedNote?.name === note.name ? 'bg-indigo-500/20 text-indigo-100' : 'text-gray-300'
+                  filteredNotes.map((note) => {
+                    const empty = isEmptyNote(note.content);
+                    return (
+                      <button
+                        key={note.name}
+                        className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${
+                          selectedNote?.name === note.name
+                            ? 'bg-indigo-500/20 text-indigo-100'
+                            : empty
+                            ? 'text-yellow-300/80'
+                            : 'text-gray-300'
                         }`}
-                      onClick={() => openNote(note)}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setContextMenu({
-                          x: e.clientX,
-                          y: e.clientY,
-                          note,
-                        });
-                      }}
-                    >
-                      <FileText className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
-                    </button>
-                  ))
+                        onClick={() => openNote(note)}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setContextMenu({ x: e.clientX, y: e.clientY, note });
+                        }}
+                      >
+                        <FileText className={`h-4 w-4 shrink-0 ${empty && selectedNote?.name !== note.name ? 'text-yellow-400' : ''}`} />
+                        <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+                      </button>
+                    );
+                  })
                 )}
               </div>
             </>

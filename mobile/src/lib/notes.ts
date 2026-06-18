@@ -68,6 +68,20 @@ export function applyTagsToContent(content: string, tags: string[]): string {
   return `タグ: ${tagsString}\n\n${content}`;
 }
 
+// タイトル・日付・タグ行しかない未記入ファイルを判定
+export function isEmptyNote(content: string): boolean {
+  const meaningful = content.split('\n').filter((l) => {
+    const t = l.trim();
+    return (
+      t !== '' &&
+      !t.startsWith('#') &&
+      !/^作成日時[:：]/i.test(t) &&
+      !/^(タグ|tags?)[:：]/i.test(t)
+    );
+  });
+  return meaningful.length === 0;
+}
+
 // [[link]] → markdownリンクへ変換（プレビュー用）
 export function preprocessWikiLinks(text: string) {
   if (!text) return '';

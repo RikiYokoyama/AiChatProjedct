@@ -7,6 +7,7 @@ export default function SwipeableNoteRow({
   note,
   isActive,
   isFavorite,
+  isEmpty,
   onOpen,
   onDelete,
   onArchive,
@@ -16,6 +17,7 @@ export default function SwipeableNoteRow({
   note: Note;
   isActive: boolean;
   isFavorite: boolean;
+  isEmpty: boolean;
   onOpen: () => void;
   onDelete: () => void;
   onArchive: () => void;
@@ -110,7 +112,10 @@ export default function SwipeableNoteRow({
           onOpen();
         }}
       >
-        <FileText className="h-4 w-4 shrink-0 text-gray-500" />
+        {isEmpty && (
+          <div className="absolute left-0 top-0 h-full w-0.5 rounded-r bg-yellow-400/70" />
+        )}
+        <FileText className={`h-4 w-4 shrink-0 ${isEmpty ? 'text-yellow-400' : 'text-gray-500'}`} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             {isFavorite && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />}
