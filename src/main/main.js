@@ -626,10 +626,15 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
               }
               const tags = extractTags(content);
               const wikiLinks = extractWikiLinks(content);
+              const isEmpty = content.split('\n').filter((l) => {
+                const t = l.trim();
+                return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
+              }).length === 0;
               cached = {
                 updatedAt: mtimeStr,
                 tags,
-                wikiLinks
+                wikiLinks,
+                isEmpty
               };
               cache[relativePath] = cached;
               cacheUpdated.value = true;
@@ -641,7 +646,8 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
               updatedAt: mtimeStr,
               content: '', // 本文ロードをスキップ
               tags: cached.tags,
-              wikiLinks: cached.wikiLinks
+              wikiLinks: cached.wikiLinks,
+              isEmpty: cached.isEmpty ?? false
             });
           }
         } catch (err) {

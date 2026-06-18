@@ -51,6 +51,7 @@ interface Note {
   content: string;
   tags?: string[];
   wikiLinks?: string[];
+  isEmpty?: boolean;
 }
 
 interface AppConfig {
@@ -74,19 +75,6 @@ type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph' | 'search';
 function cleanFilename(value: string) {
   const name = value.trim().replace(/[\\/:*?"<>|]/g, '-');
   return name.endsWith('.md') ? name : `${name || 'Untitled'}.md`;
-}
-
-function isEmptyNote(content: string): boolean {
-  const meaningful = content.split('\n').filter((l) => {
-    const t = l.trim();
-    return (
-      t !== '' &&
-      !t.startsWith('#') &&
-      !/^作成日時[:：]/i.test(t) &&
-      !/^(タグ|tags?)[:：]/i.test(t)
-    );
-  });
-  return meaningful.length === 0;
 }
 
 function RibbonButton({
@@ -1395,7 +1383,7 @@ export default function App() {
                   <div className="p-4 text-sm text-gray-400">読み込み中...</div>
                 ) : (
                   filteredNotes.map((note) => {
-                    const empty = isEmptyNote(note.content);
+                    const empty = note.isEmpty ?? false;
                     return (
                       <button
                         key={note.name}
