@@ -13,8 +13,10 @@ import {
   Plus,
   Save,
   Search,
+  ListTree,
   Send,
   Settings,
+  Tag,
   Trash2,
   X,
   Zap,
@@ -979,6 +981,54 @@ export default function App() {
     }
   }
 
+  async function handlePcAiAction(action: 'tags' | 'summary') {
+    if (!selectedNote || !config.geminiApiKey) return;
+    const body = content;
+
+    if (action === 'tags') {
+      setAutoSaveStatus('saving');
+      const tags = await generateNoteTags(config.geminiApiKey, body.slice(0, 600), '');
+      const current = selectedNote.tags || [];
+      const nextTags = Array.from(new Set([...current, ...tags]));
+      const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
+      const tagsString = nextTags.join(', ');
+      const nextContent = tagLineRegex.test(body)
+        ? body.replace(tagLineRegex, `タグ: ${tagsString}`)
+        : `タグ: ${tagsString}\n\n${body}`;
+      await window.electronAPI.saveNote({ filename: selectedNote.name, content: nextContent });
+      setContent(nextContent);
+      setNoteContext(nextContent);
+      setSelectedNote((prev) => prev ? { ...prev, tags: nextTags, content: nextContent } : null);
+      await loadNotesList();
+      setAutoSaveStatus('saved');
+      setTimeout(() => setAutoSaveStatus('idle'), 1500);
+      return;
+    }
+
+    // 要約
+    setIsGenerating(true);
+    const client = new GeminiClient(config.geminiApiKey);
+    let acc = body + '\n\n## 要約\n\n';
+    setContent(acc);
+    await client.chatStream(
+      [{ role: 'user', content: `以下のノートを3〜5行で簡潔に要約してください。要約本文のみを出力してください。\n\n${body.slice(0, 8000)}` }],
+      SYSTEM_PROMPTS['markdown-struct'],
+      aiModelMode,
+      null,
+      (chunk) => { acc += chunk; setContent(acc); },
+      async () => {
+        await window.electronAPI.saveNote({ filename: selectedNote.name, content: acc });
+        setNoteContext(acc);
+        await loadNotesList();
+        setIsGenerating(false);
+      },
+      (err) => {
+        setIsGenerating(false);
+        alert(err instanceof Error ? err.message : String(err));
+      },
+    );
+  }
+
   async function sendChat(overridePrompt?: string) {
     const prompt = (overridePrompt ?? chatInput).trim();
     if (!prompt || isGenerating) return;
@@ -1674,20 +1724,35 @@ export default function App() {
                 )}
               </div>
 
-              {/* タイトルから生成ボタン */}
+              {/* AIクイックアクション */}
               {selectedNote && (
-                <div className="mb-2">
+                <div className="mb-2 flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     disabled={isGenerating}
-                    onClick={() => {
-                      const title = selectedNote.name.replace(/\.md$/i, '');
-                      sendChat(title);
-                    }}
+                    onClick={() => sendChat(selectedNote.name.replace(/\.md$/i, ''))}
                     className="flex items-center gap-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 px-3 py-1.5 text-xs text-yellow-300 hover:bg-yellow-500/20 disabled:opacity-40 transition-colors"
                   >
                     <Zap className="h-3.5 w-3.5 text-yellow-400" />
                     タイトルから生成
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isGenerating}
+                    onClick={() => handlePcAiAction('tags')}
+                    className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40 transition-colors"
+                  >
+                    <Tag className="h-3.5 w-3.5 text-emerald-400" />
+                    タグ生成
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isGenerating}
+                    onClick={() => handlePcAiAction('summary')}
+                    className="flex items-center gap-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 px-3 py-1.5 text-xs text-indigo-300 hover:bg-indigo-500/20 disabled:opacity-40 transition-colors"
+                  >
+                    <ListTree className="h-3.5 w-3.5 text-indigo-400" />
+                    要約
                   </button>
                 </div>
               )}

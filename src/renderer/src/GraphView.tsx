@@ -461,54 +461,85 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       if (found) onSelectNote(found);
     });
 
-    // --- 2D標準の ForceAtlas2 WebWorker 物理エンジンの復活 ---
-    let worker: any = null;
+    // 軽量バネ力シミュレーション（モバイルと同仕様）
+    const velMap = new Map<string, { vx: number; vy: number }>();
+    nodesArray.forEach((n) => velMap.set(n, { vx: 0, vy: 0 }));
 
-    import('graphology-layout-forceatlas2/worker').then(({ default: FA2LayoutWorker }) => {
-      if (!sigmaRef.current || viewMode !== '2D') return;
+    let rafId = 0;
+    let stopped = false;
+    let iterations = 0;
 
-      worker = new FA2LayoutWorker(subGraph, {
-        settings: {
-          gravity: settings2DRef.current.centerForce * 0.5,
-          scalingRatio: settings2DRef.current.repulsion * 5.0,
-          strongGravityMode: true,
-          slowDown: 2.0, // 以前の普通のアニメーションスピード
-          barnesHutOptimize: nodesArray.length > 300,
-          barnesHutTheta: 0.6,
+    function step() {
+      // 反発力 O(N²)
+      for (let i = 0; i < nodesArray.length; i++) {
+        for (let j = i + 1; j < nodesArray.length; j++) {
+          const a = nodesArray[i], b = nodesArray[j];
+          let dx = (subGraph.getNodeAttribute(a, 'x') as number) - (subGraph.getNodeAttribute(b, 'x') as number);
+          let dy = (subGraph.getNodeAttribute(a, 'y') as number) - (subGraph.getNodeAttribute(b, 'y') as number);
+          let dist2 = dx * dx + dy * dy;
+          if (dist2 < 1) dist2 = 1;
+          const force = 3000 / dist2;
+          const dist = Math.sqrt(dist2);
+          dx /= dist; dy /= dist;
+          velMap.get(a)!.vx += dx * force;
+          velMap.get(a)!.vy += dy * force;
+          velMap.get(b)!.vx -= dx * force;
+          velMap.get(b)!.vy -= dy * force;
         }
-      });
-
-      worker2DInstanceRef.current = worker;
-
-      // 物理演算開始（停止はautoStopWithFixで一元管理）
-      if (!isPausedRef.current) {
-        worker.start();
       }
+      // ばね力（エッジ）
+      activeElements.edges.forEach((edge) => {
+        const a = edge.source, b = edge.target;
+        if (!velMap.has(a) || !velMap.has(b)) return;
+        const dx = (subGraph.getNodeAttribute(b, 'x') as number) - (subGraph.getNodeAttribute(a, 'x') as number);
+        const dy = (subGraph.getNodeAttribute(b, 'y') as number) - (subGraph.getNodeAttribute(a, 'y') as number);
+        const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+        const force = (dist - 110) * 0.01;
+        velMap.get(a)!.vx += (dx / dist) * force;
+        velMap.get(a)!.vy += (dy / dist) * force;
+        velMap.get(b)!.vx -= (dx / dist) * force;
+        velMap.get(b)!.vy -= (dy / dist) * force;
+      });
+      // 中心引力 + 減衰 + 位置更新（固定ノードはスキップ）
+      nodesArray.forEach((n) => {
+        if (fixedNodes2D.current[n]) return;
+        const v = velMap.get(n)!;
+        const x = subGraph.getNodeAttribute(n, 'x') as number;
+        const y = subGraph.getNodeAttribute(n, 'y') as number;
+        v.vx += -x * 0.002;
+        v.vy += -y * 0.002;
+        v.vx *= 0.85;
+        v.vy *= 0.85;
+        subGraph.setNodeAttribute(n, 'x', x + v.vx);
+        subGraph.setNodeAttribute(n, 'y', y + v.vy);
+      });
+      sigma.refresh();
+    }
 
-      // ドラッグ固定ノードの座標を維持するためForceAtlas2停止後に1回だけ適用
-      const applyFixedNodes = () => {
-        nodesArray.forEach((node) => {
-          if (fixedNodes2D.current[node]) {
-            subGraph.setNodeAttribute(node, 'x', fixedNodes2D.current[node].x);
-            subGraph.setNodeAttribute(node, 'y', fixedNodes2D.current[node].y);
-          }
-        });
-        if (sigmaRef.current) sigmaRef.current.refresh();
-      };
-
-      // ForceAtlas2停止後に固定座標を反映して静止
-      const autoStopWithFix = setTimeout(() => {
-        if (worker && typeof worker.stop === 'function') worker.stop();
-        applyFixedNodes();
-      }, (nodesArray.length > 500 ? 3000 : 5000) + 100);
-
-      return () => {
-        clearTimeout(autoStopWithFix);
-        if (worker) {
-          worker.kill();
+    function loop() {
+      if (stopped) return;
+      if (!isPausedRef.current) {
+        step();
+        iterations++;
+        if (iterations < 300) {
+          rafId = requestAnimationFrame(loop);
+        } else {
+          // 収束後は3フレームに1回に間引く
+          rafId = requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(loop)));
         }
-      };
-    });
+      } else {
+        rafId = requestAnimationFrame(loop);
+      }
+    }
+
+    rafId = requestAnimationFrame(loop);
+
+    const springWorker = {
+      stop: () => { cancelAnimationFrame(rafId); },
+      start: () => { cancelAnimationFrame(rafId); rafId = requestAnimationFrame(loop); },
+      kill: () => { stopped = true; cancelAnimationFrame(rafId); },
+    };
+    worker2DInstanceRef.current = springWorker;
 
     let draggedNode2D: string | null = null;
     let hoveredNode2D: string | null = null;
@@ -531,9 +562,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     sigma.on('downNode', (e) => {
       draggedNode2D = e.node;
       sigma.getCamera().disable();
-      if (worker && typeof worker.start === 'function') {
-        worker.start();
-      }
     });
 
     sigma.getMouseCaptor().on('mousemovebody', (e) => {
@@ -580,12 +608,6 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
         draggedNode2D = null;
         sigma.getCamera().enable();
-
-        setTimeout(() => {
-          if (worker && typeof worker.stop === 'function') {
-            worker.stop();
-          }
-        }, 1000);
       }
       if (tooltipRef.current) {
         tooltipRef.current.style.display = 'none';
@@ -597,6 +619,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     return () => {
       window.removeEventListener('mouseup', handleMouseUp2D);
+      springWorker.kill();
       sigma.kill();
       sigmaRef.current = null;
       worker2DInstanceRef.current = null;
