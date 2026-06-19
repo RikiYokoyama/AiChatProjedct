@@ -4,11 +4,12 @@ export interface ChatMessage {
 }
 
 export type ChatMode = 'deep-think' | 'markdown-struct' | 'long-explain' | 'prompt-gen';
-export type AiModelMode = 'flash' | 'pro';
+export type AiModelMode = 'flash-lite' | 'flash' | 'pro';
 
 const MODEL_CANDIDATES: Record<AiModelMode, string[]> = {
-  flash: ['gemini-3.5-flash', 'gemini-3.1-flash-lite'],
-  pro: ['gemini-3.5-pro', 'gemini-3.1-pro'],
+  'flash-lite': ['gemini-3.1-flash-lite-preview'],
+  flash: ['gemini-3.5-flash'],
+  pro: ['gemini-3.1-pro-preview', 'gemini-3.5-flash'],
 };
 
 export const SYSTEM_PROMPTS: Record<ChatMode, string> = {

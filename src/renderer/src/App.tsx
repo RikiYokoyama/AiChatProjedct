@@ -199,7 +199,7 @@ export default function App() {
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatMode, setChatMode] = useState<string>('deep-think');
-  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash');
+  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [pendingPrompt, setPendingPrompt] = useState<{ name: string; prompt: string } | null>(null);
   const [newPromptName, setNewPromptName] = useState('');
@@ -1719,6 +1719,7 @@ export default function App() {
                   value={aiModelMode}
                   onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
                 >
+                  <option value="flash-lite">Flash Lite</option>
                   <option value="flash">Flash</option>
                   <option value="pro">Pro</option>
                 </select>

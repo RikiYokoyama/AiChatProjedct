@@ -60,7 +60,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [chatMode, setChatMode] = useState<string>('deep-think');
   const chatModeRef = useRef<string>('deep-think');
-  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash');
+  const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   const [gitStatus, setGitStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
@@ -654,9 +654,11 @@ export default function App() {
             config={config}
             gitStatus={gitStatus}
             gitMessage={gitMessage}
+            aiModelMode={aiModelMode}
             onSave={handleSaveConfig}
             onSync={() => runSync()}
             onDeletePrompt={handleDeletePrompt}
+            onModelModeChange={setAiModelMode}
           />
         )}
       </main>
