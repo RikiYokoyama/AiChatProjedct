@@ -45,6 +45,9 @@ import {
   fetchNoteContentFromGitHub,
   saveNoteToGitHub,
   deleteNoteOnGitHub,
+  currentYearMonth,
+  addEntryToIndex,
+  appendToMasterMoc,
 } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
@@ -290,7 +293,8 @@ export default function App() {
       name = cleanFilename(`${firstLine} (${counter++})`);
     }
     const initial = initialNoteContent(noteTitle(name));
-    const remotePath = `notes/${name}`;
+    const ym = currentYearMonth();
+    const remotePath = `notes/${ym}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -305,6 +309,12 @@ export default function App() {
 
     // state に直接追加（refreshNotes は _index.json が古いため不可）
     const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
+    // _index.json と moc/moc.md を非同期で更新（失敗しても作成自体は成功扱い）
+    if (config.gitRemoteUrl) {
+      const url = config.gitRemoteUrl;
+      addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
+      appendToMasterMoc(url, name).catch(console.error);
+    }
     setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);
     setTab('note');
@@ -459,7 +469,8 @@ export default function App() {
     }
     const now = new Date().toLocaleString('ja-JP');
     const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
-    const remotePath = `memos/${name}`;
+    const ym = currentYearMonth();
+    const remotePath = `memos/${ym}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -472,6 +483,10 @@ export default function App() {
       return;
     }
     const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
+    if (config.gitRemoteUrl) {
+      const url = config.gitRemoteUrl;
+      addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
+    }
     setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);
     setTab('note');

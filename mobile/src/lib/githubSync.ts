@@ -405,6 +405,59 @@ export async function saveNoteToGitHub(
   return newSha ?? '';
 }
 
+/** 現在の年月を "YYYY-MM" 形式で返す */
+export function currentYearMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+/** _index.json に新規エントリを追加（作成時のみ呼ぶ・失敗しても無視） */
+export async function addEntryToIndex(
+  gitRemoteUrl: string,
+  entry: { name: string; path: string; updatedAt: string; isMoc: boolean },
+): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return;
+  const sync = new GitHubSync(token, repo, branch);
+  try {
+    const file = await sync.fetchRemoteFile('_index.json');
+    const index: unknown[] = JSON.parse(file.content);
+    // 同名エントリが既にあれば更新、なければ追加
+    const idx = (index as Array<{ name: string }>).findIndex(e => e.name === entry.name);
+    if (idx >= 0) {
+      index[idx] = entry;
+    } else {
+      index.push(entry);
+    }
+    await sync.putFile('_index.json', JSON.stringify(index, null, 2), file.sha);
+  } catch {
+    // _index.json がない場合は新規作成
+    try {
+      await sync.putFile('_index.json', JSON.stringify([entry], null, 2));
+    } catch { /* silent */ }
+  }
+}
+
+/** moc/moc.md に新規ノートのリンクを追記する（失敗しても無視） */
+export async function appendToMasterMoc(
+  gitRemoteUrl: string,
+  noteName: string,  // ファイル名 例: "骨伝導イヤホン.md"
+): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return;
+  const sync = new GitHubSync(token, repo, branch);
+  const mocPath = 'moc/moc.md';
+  const displayName = noteName.replace(/\.md$/i, '');
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const newLine = `- [[${displayName}]] — ${dateStr} 追加\n`;
+  try {
+    const file = await sync.fetchRemoteFile(mocPath);
+    const updated = file.content.trimEnd() + '\n' + newLine;
+    await sync.putFile(mocPath, updated, file.sha);
+  } catch {
+    /* moc/moc.md が存在しない場合は作成しない（ユーザーが手動作成を前提） */
+  }
+}
+
 /** GitHub からファイルを削除する */
 export async function deleteNoteOnGitHub(
   gitRemoteUrl: string,

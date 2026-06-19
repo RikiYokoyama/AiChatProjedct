@@ -851,6 +851,7 @@ async function updateIndex() {
       .filter(f => !f.name.startsWith('_'))
       .map(f => ({
         name: f.name,
+        path: f.name,
         tags: f.tags,
         updatedAt: f.updatedAt,
         isEmpty: f.isEmpty ?? false,
