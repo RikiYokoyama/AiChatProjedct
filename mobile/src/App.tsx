@@ -160,16 +160,38 @@ export default function App() {
     setNotes(await listNotes());
   }, []);
 
-  // ---------- 自動同期（visibilitychange） ----------
+  // ---------- アプリ復帰時自動更新（Phase 8） ----------
   useEffect(() => {
-    const handleVisibilityChange = () => {
+    const MIN_REFRESH_MS = 60 * 1000;
+    let lastRefresh = 0;
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible') return;
       const cfg = configRef.current;
-      if (!cfg.autoSync || !cfg.gitRemoteUrl) return;
       const now = Date.now();
-      if (now - lastAutoSyncRef.current < MIN_AUTO_SYNC_MS) return;
-      lastAutoSyncRef.current = now;
-      runSyncRef.current(cfg);
+      if (now - lastRefresh < MIN_REFRESH_MS) return;
+      lastRefresh = now;
+
+      if (cfg.gitRemoteUrl) {
+        // GitHub 直接アクセス: _index.json を再取得してノートリストを更新
+        try {
+          const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
+          const withMeta: Note[] = remoteList.map(r => ({
+            ...buildNote(r.name, '', r.updatedAt),
+            remotePath: r.remotePath,
+            sha: r.sha,
+          }));
+          setNotes(withMeta);
+        } catch { /* silent */ }
+      } else if (cfg.autoSync) {
+        // ローカルストレージ + 旧来の sync
+        const syncNow = Date.now();
+        if (syncNow - lastAutoSyncRef.current < MIN_AUTO_SYNC_MS) return;
+        lastAutoSyncRef.current = syncNow;
+        runSyncRef.current(cfg);
+      }
     };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   // eslint-disable-next-line react-hooks/exhaustive-deps
