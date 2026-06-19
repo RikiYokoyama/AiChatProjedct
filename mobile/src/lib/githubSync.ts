@@ -350,35 +350,42 @@ export interface RemoteNote {
   updatedAt: string;
 }
 
-/** GitHub の _index.json からノートリストを取得（高速・1リクエスト） */
+/** GitHub の _index.json からノートリストを取得
+ *  パスは Git Trees API の実際の値を使い、_index.json はメタデータ補完のみに使う。
+ *  これにより archive/ ↔ notes/ のパスずれによる 404 を防ぐ。
+ */
 export async function fetchNoteListFromGitHub(gitRemoteUrl: string): Promise<RemoteNote[]> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return [];
   const sync = new GitHubSync(token, repo, branch);
-  // _index.json を優先（PC版 sync 後に生成される）
+
+  // Git Trees API でGitHub上の実際のパスを取得（常に正確）
+  const tree = await sync.fetchRemoteList();
+  // ファイル名 → 実際の GitHub パス・sha のマップ
+  const treeMap = new Map(tree.map(f => [f.name, f]));
+
+  // _index.json からメタデータ（updatedAt など）を取得（失敗しても続行）
+  let metaMap = new Map<string, { updatedAt: string }>();
   try {
     const file = await sync.fetchRemoteFile('_index.json');
-    const index = JSON.parse(file.content) as Array<{
-      name: string; path: string; sha: string; updatedAt: string;
-    }>;
-    return index.map(e => ({
-      name: e.name.split('/').pop() ?? e.name,
-      remotePath: e.path ?? e.name,
-      sha: e.sha ?? '',
-      updatedAt: e.updatedAt ?? new Date().toISOString(),
-    }));
-  } catch {
-    // _index.json がない場合は Git Trees API にフォールバック
-    const list = await sync.fetchRemoteList();
-    return list
-      .filter(f => !f.name.startsWith('_'))
-      .map(f => ({
-        name: f.name.split('/').pop() ?? f.name,
-        remotePath: f.path,
+    const index = JSON.parse(file.content) as Array<{ name: string; updatedAt: string }>;
+    for (const e of index) {
+      const fileName = e.name.split('/').pop() ?? e.name;
+      metaMap.set(fileName, { updatedAt: e.updatedAt ?? new Date().toISOString() });
+    }
+  } catch { /* _index.json がなくても動作する */ }
+
+  return tree
+    .filter(f => !f.name.startsWith('_'))
+    .map(f => {
+      const meta = metaMap.get(f.name);
+      return {
+        name: f.name,
+        remotePath: f.path,           // GitHub 上の実際のパス（archive/ でも notes/ でも正確）
         sha: f.sha,
-        updatedAt: new Date().toISOString(),
-      }));
-  }
+        updatedAt: meta?.updatedAt ?? new Date().toISOString(),
+      };
+    });
 }
 
 /** GitHub から1ファイルのコンテンツを取得 */
