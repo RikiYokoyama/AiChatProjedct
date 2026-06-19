@@ -184,6 +184,9 @@ export default function App() {
   }, []);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [masterTags, setMasterTags] = useState<string[]>([]);
+  const [showMigrationDialog, setShowMigrationDialog] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [migrationLog, setMigrationLog] = useState<string>('');
   const [ribbonView, setRibbonView] = useState<RibbonView>('notes');
   const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
   const [showNewNoteModal, setShowNewNoteModal] = useState(false);
@@ -1075,6 +1078,9 @@ export default function App() {
       if (!loaded.geminiApiKey) setRibbonView('settings');
     });
     window.electronAPI.readMasterTags().then((tags) => setMasterTags(tags));
+    window.electronAPI.checkMigration().then(({ done }) => {
+      if (!done) setShowMigrationDialog(true);
+    });
     loadNotesList();
     const unsubscribe = window.electronAPI.onGitStatusChanged((status, error) => {
       setGitStatus(status);
@@ -1096,8 +1102,51 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [content, selectedNote, editMode]);
 
+  async function handleRunMigration() {
+    setMigrationStatus('running');
+    const result = await window.electronAPI.runMigration();
+    if (result.skipped) { setShowMigrationDialog(false); return; }
+    if (result.success) {
+      setMigrationLog(`${result.moved.length}件のファイルを notes/ フォルダへ移行しました。`);
+      setMigrationStatus('done');
+      await loadNotesList();
+    } else {
+      setMigrationLog(`エラー: ${result.error}`);
+      setMigrationStatus('error');
+    }
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#070a13] text-gray-100">
+      {/* フォルダ移行ダイアログ */}
+      {showMigrationDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="w-[420px] rounded-xl border border-white/10 bg-[#0d1117] p-6 shadow-2xl">
+            <h2 className="mb-3 text-base font-bold text-white">フォルダ構成の更新</h2>
+            {migrationStatus === 'idle' && (
+              <>
+                <p className="mb-4 text-sm text-gray-300">
+                  ノートを <code className="rounded bg-white/10 px-1">notes/</code>・<code className="rounded bg-white/10 px-1">memos/</code>・<code className="rounded bg-white/10 px-1">moc/</code> フォルダに整理します。<br />
+                  ルート直下の .md ファイルを <code className="rounded bg-white/10 px-1">notes/</code> へ移行します。
+                </p>
+                <div className="flex gap-3">
+                  <button onClick={handleRunMigration} className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500">移行する</button>
+                  <button onClick={() => setShowMigrationDialog(false)} className="flex-1 rounded-lg border border-white/10 py-2 text-sm text-gray-400 hover:bg-white/5">後で</button>
+                </div>
+              </>
+            )}
+            {migrationStatus === 'running' && (
+              <p className="text-sm text-indigo-300">移行中...</p>
+            )}
+            {(migrationStatus === 'done' || migrationStatus === 'error') && (
+              <>
+                <p className={`mb-4 text-sm ${migrationStatus === 'done' ? 'text-emerald-400' : 'text-red-400'}`}>{migrationLog}</p>
+                <button onClick={() => setShowMigrationDialog(false)} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500">閉じる</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       {/* ウィンドウタイトルバー */}
       <div className="drag-area flex h-[35px] shrink-0 items-center justify-between border-b border-white/10 bg-[#070a13] px-4 select-none">
         <div className="flex items-center gap-2">

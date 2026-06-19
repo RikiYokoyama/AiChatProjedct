@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readMasterTags: () => ipcRenderer.invoke('read-master-tags'),
   saveMasterTags: (tags) => ipcRenderer.invoke('save-master-tags', tags),
   updateIndex: () => ipcRenderer.invoke('update-index'),
+  checkMigration: () => ipcRenderer.invoke('check-migration'),
+  runMigration: () => ipcRenderer.invoke('run-migration'),
   appendToNote: (data) => ipcRenderer.invoke('append-to-note', data),
   loadGraphSettings: () => ipcRenderer.invoke('load-graph-settings'),
   saveGraphSettings: (settings) => ipcRenderer.invoke('save-graph-settings', settings),

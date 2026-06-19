@@ -838,6 +838,56 @@ async function updateIndex() {
   }
 }
 
+// フォルダ構成移行処理
+const migrationFlagPath = path.join(appUserDataPath, 'migration_v2_done');
+
+async function runFolderMigration() {
+  const notesPath = appConfig.notesPath;
+  if (!notesPath || !fs.existsSync(notesPath)) return { skipped: true };
+  if (fs.existsSync(migrationFlagPath)) return { skipped: true };
+
+  const log = [];
+  try {
+    // サブフォルダを作成
+    for (const dir of ['notes', 'memos', 'archive', 'moc']) {
+      const dirPath = path.join(notesPath, dir);
+      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    }
+
+    // ルート直下の .md ファイルを notes/ へ移行
+    const rootEntries = fs.readdirSync(notesPath, { withFileTypes: true });
+    const rootMdFiles = rootEntries
+      .filter(e => e.isFile() && e.name.endsWith('.md') && !e.name.startsWith('_'))
+      .map(e => e.name);
+
+    for (const file of rootMdFiles) {
+      const src = path.join(notesPath, file);
+      const dst = path.join(notesPath, 'notes', file);
+      // コピー後に元ファイルを削除
+      fs.copyFileSync(src, dst);
+      if (fs.existsSync(dst)) {
+        fs.unlinkSync(src);
+        log.push(file);
+      }
+    }
+
+    fs.writeFileSync(migrationFlagPath, new Date().toISOString(), 'utf8');
+    await updateIndex();
+    return { success: true, moved: log };
+  } catch (err) {
+    console.error('Migration failed:', err);
+    return { success: false, error: err.message, moved: log };
+  }
+}
+
+ipcMain.handle('check-migration', async () => {
+  return { done: fs.existsSync(migrationFlagPath) };
+});
+
+ipcMain.handle('run-migration', async () => {
+  return runFolderMigration();
+});
+
 ipcMain.handle('update-index', async () => {
   await updateIndex();
   return { success: true };

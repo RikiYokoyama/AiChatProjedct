@@ -166,12 +166,9 @@ export class GitHubSync {
     }
   }
 
-  // 新しいアーカイブ用パスを生成する (例: archive/YYYY-MM/name.md)
+  // 新規ファイルのパスを生成する（notes/ フォルダへ）
   private generateArchivePath(name: string): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `archive/${year}-${month}/${name}`;
+    return `notes/${name}`;
   }
 
   private async fetchDefaultBranch(): Promise<string> {
