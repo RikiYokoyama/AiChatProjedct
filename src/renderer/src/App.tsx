@@ -132,7 +132,7 @@ function SortableTab({
         }`}
     >
       <FileText className="h-3 w-3 shrink-0" />
-      <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+      <span className="truncate">{note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
       <button
         onClick={onClose}
         className="ml-0.5 hidden shrink-0 rounded p-0.5 hover:bg-white/20 group-hover:flex"
@@ -486,12 +486,12 @@ export default function App() {
     const map: Record<string, { outgoing: string[]; incoming: string[] }> = {};
     
     for (const note of notes) {
-      const cleanName = note.name.replace(/\.md$/i, '');
+      const cleanName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
       map[cleanName] = { outgoing: [], incoming: [] };
     }
 
     for (const note of notes) {
-      const sourceName = note.name.replace(/\.md$/i, '');
+      const sourceName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
       const outgoing = note.wikiLinks || [];
       
       if (map[sourceName]) {
@@ -663,7 +663,7 @@ export default function App() {
 
   function renameNote(note: Note) {
     setRenameNoteTarget(note);
-    setRenameNewName(note.name.replace(/\.md$/i, ''));
+    setRenameNewName(note.name.replace(/^.*\//, '').replace(/\.md$/i, ''));
     setShowRenameModal(true);
   }
 
@@ -1319,7 +1319,7 @@ export default function App() {
                                     <div className="text-[10px] text-gray-600 px-2 italic">なし</div>
                                   ) : (
                                     relations.outgoing.map(dest => {
-                                      const destNote = notes.find(note => note.name.replace(/\.md$/i, '').toLowerCase() === dest.toLowerCase());
+                                      const destNote = notes.find(note => note.name.replace(/^.*\//, '').replace(/\.md$/i, '').toLowerCase() === dest.toLowerCase());
                                       return (
                                         <button
                                           key={dest}
@@ -1350,7 +1350,7 @@ export default function App() {
                                     <div className="text-[10px] text-gray-600 px-2 italic">なし</div>
                                   ) : (
                                     relations.incoming.map(src => {
-                                      const srcNote = notes.find(note => note.name.replace(/\.md$/i, '').toLowerCase() === src.toLowerCase());
+                                      const srcNote = notes.find(note => note.name.replace(/^.*\//, '').replace(/\.md$/i, '').toLowerCase() === src.toLowerCase());
                                       return (
                                         <button
                                           key={src}
@@ -1479,7 +1479,7 @@ export default function App() {
                         }}
                       >
                         <FileText className={`h-4 w-4 shrink-0 ${empty && selectedNote?.name !== note.name ? 'text-yellow-400' : ''}`} />
-                        <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+                        <span className="truncate">{note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
                       </button>
                     );
                   })
