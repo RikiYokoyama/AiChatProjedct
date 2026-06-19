@@ -214,14 +214,30 @@ export default function App() {
         const note = notesRef.current.find(n => n.name === noteTabSelectedName);
         const remotePath = note?.remotePath ?? `notes/${noteTabSelectedName}`;
         try {
-          const newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, content, note?.sha);
+          let sha = note?.sha;
+          let newSha: string;
+          try {
+            newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, content, sha);
+          } catch (firstErr: unknown) {
+            // sha 競合の場合は最新 sha を取得してリトライ
+            const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+            if (msg.includes('409') || msg.includes('422')) {
+              const latest = await fetchNoteContentFromGitHub(cfg.gitRemoteUrl, remotePath);
+              sha = latest.sha;
+              newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, content, sha);
+            } else {
+              throw firstErr;
+            }
+          }
           setNotes(prev => prev.map(n =>
             n.name === noteTabSelectedName
               ? { ...buildNote(n.name, content), remotePath, sha: newSha || n.sha }
               : n
           ));
         } catch (err) {
-          console.error('Auto-save to GitHub failed:', err);
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error('Auto-save to GitHub failed:', msg);
+          alert(`保存に失敗しました: ${msg}`);
         }
       } else {
         await writeNote(noteTabSelectedName, content);
@@ -313,8 +329,15 @@ export default function App() {
           const block = `---\n\n## User\n\n${userPrompt.trim()}\n\n## AI\n\n${cleanedText}`;
           const finalContent = `${initial.trimEnd()}\n\n${block}\n`;
           setNoteTabContent(finalContent);
-          await writeNote(name, finalContent);
-          await refreshNotes();
+          const cfg2 = configRef.current;
+          if (cfg2.gitRemoteUrl) {
+            const currentSha = notesRef.current.find(n => n.name === name)?.sha;
+            const savedSha = await saveNoteToGitHub(cfg2.gitRemoteUrl, remotePath, finalContent, currentSha);
+            setNotes(prev => prev.map(n => n.name === name ? { ...buildNote(n.name, finalContent), remotePath, sha: savedSha || n.sha } : n));
+          } else {
+            await writeNote(name, finalContent);
+            setNotes(prev => prev.map(n => n.name === name ? buildNote(n.name, finalContent) : n));
+          }
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
             name: firstLine.slice(0, 10),
@@ -351,8 +374,15 @@ export default function App() {
       async (fullText) => {
         const finalContent = initial + fullText;
         setNoteTabContent(finalContent);
-        await writeNote(name, finalContent);
-        await refreshNotes();
+        const cfg2 = configRef.current;
+        if (cfg2.gitRemoteUrl) {
+          const currentSha = notesRef.current.find(n => n.name === name)?.sha;
+          const savedSha = await saveNoteToGitHub(cfg2.gitRemoteUrl, remotePath, finalContent, currentSha);
+          setNotes(prev => prev.map(n => n.name === name ? { ...buildNote(n.name, finalContent), remotePath, sha: savedSha || n.sha } : n));
+        } else {
+          await writeNote(name, finalContent);
+          setNotes(prev => prev.map(n => n.name === name ? buildNote(n.name, finalContent) : n));
+        }
         setIsGenerating(false);
       },
       (err) => {
