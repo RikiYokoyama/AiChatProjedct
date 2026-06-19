@@ -79,8 +79,9 @@ export class GitHubSync {
 
   // Git Trees API を使ってリポジトリ内すべてのファイルを再帰的に取得
   async fetchRemoteList(): Promise<{ name: string; path: string; sha: string }[]> {
+    const treeRef = this.branch || 'HEAD';
     const res = await fetch(
-      `${API}/repos/${this.repo}/git/trees/${encodeURIComponent(this.branch)}?recursive=1`,
+      `${API}/repos/${this.repo}/git/trees/${encodeURIComponent(treeRef)}?recursive=1`,
       { headers: this.headers() }
     );
     if (res.status === 404) return []; // 空のリポジトリ
@@ -101,8 +102,9 @@ export class GitHubSync {
 
   async fetchRemoteFile(remotePath: string): Promise<RemoteFile> {
     const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
+    const refParam = this.branch ? `?ref=${encodeURIComponent(this.branch)}` : '';
     const res = await fetch(
-      `${API}/repos/${this.repo}/contents/${encodedPath}?ref=${encodeURIComponent(this.branch)}`,
+      `${API}/repos/${this.repo}/contents/${encodedPath}${refParam}`,
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
@@ -119,7 +121,7 @@ export class GitHubSync {
       body: JSON.stringify({
         message: `sync: delete ${remotePath} from mobile`,
         sha,
-        branch: this.branch,
+        ...(this.branch ? { branch: this.branch } : {}),
       }),
     });
     if (!res.ok) {
@@ -132,8 +134,8 @@ export class GitHubSync {
     const body: Record<string, unknown> = {
       message: `sync: update ${remotePath} from mobile`,
       content: encodeBase64Utf8(content),
-      branch: this.branch,
     };
+    if (this.branch) body.branch = this.branch;
     if (sha) body.sha = sha;
     const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
     const res = await fetch(`${API}/repos/${this.repo}/contents/${encodedPath}`, {

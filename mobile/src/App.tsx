@@ -292,10 +292,15 @@ export default function App() {
     const initial = initialNoteContent(noteTitle(name));
     const remotePath = `notes/${name}`;
     let newSha: string | undefined;
-    if (config.gitRemoteUrl) {
-      newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
-    } else {
-      await writeNote(name, initial);
+    try {
+      if (config.gitRemoteUrl) {
+        newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+      } else {
+        await writeNote(name, initial);
+      }
+    } catch (err) {
+      alert('ノートの作成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+      return;
     }
 
     // state に直接追加（refreshNotes は _index.json が古いため不可）
@@ -427,10 +432,15 @@ export default function App() {
 
     const remotePath = `moc/${name}`;
     let newSha: string | undefined;
-    if (config.gitRemoteUrl) {
-      newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, body);
-    } else {
-      await writeNote(name, body);
+    try {
+      if (config.gitRemoteUrl) {
+        newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, body);
+      } else {
+        await writeNote(name, body);
+      }
+    } catch (err) {
+      alert('MOCの作成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+      return;
     }
     const newNote: Note = { ...buildNote(name, body), remotePath, sha: newSha };
     setNotes(prev => [...prev, newNote]);
@@ -451,10 +461,15 @@ export default function App() {
     const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
     const remotePath = `memos/${name}`;
     let newSha: string | undefined;
-    if (config.gitRemoteUrl) {
-      newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
-    } else {
-      await writeNote(name, initial);
+    try {
+      if (config.gitRemoteUrl) {
+        newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+      } else {
+        await writeNote(name, initial);
+      }
+    } catch (err) {
+      alert('メモの作成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+      return;
     }
     const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
     setNotes(prev => [...prev, newNote]);
