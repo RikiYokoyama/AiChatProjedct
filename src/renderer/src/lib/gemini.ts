@@ -106,7 +106,12 @@ export class GeminiClient {
         );
 
         if (!response.ok) {
-          throw new Error(`Gemini API error ${response.status}: ${await response.text()}`);
+          const status = response.status;
+          if (status === 429) throw new Error('リクエストが多すぎます（レート制限）。少し時間をおいてから再送してください。');
+          if (status === 503) throw new Error('Geminiサーバーが一時的に混雑しています（503）。しばらく待ってから再試行してください。');
+          if (status === 401 || status === 403) throw new Error('APIキーが無効または権限がありません。設定を確認してください。');
+          if (status === 400) throw new Error('リクエストの形式が正しくありません（400）。モデルまたは入力内容を確認してください。');
+          throw new Error(`Gemini APIエラー（${status}）: 時間をおいて再試行してください。`);
         }
 
         const reader = response.body?.getReader();
