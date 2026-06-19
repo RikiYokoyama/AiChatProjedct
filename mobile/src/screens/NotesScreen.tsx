@@ -6,7 +6,7 @@ import SwipeableNoteRow from '../components/SwipeableNoteRow';
 import Fab from '../components/Fab';
 import CreateModal from '../components/CreateModal';
 
-type ModalType = 'file' | 'ai' | 'memo' | null;
+type ModalType = 'file' | 'ai' | 'memo' | 'moc' | null;
 
 export default function FilesScreen({
   notes,
@@ -18,6 +18,7 @@ export default function FilesScreen({
   onOpen,
   onCreate,
   onCreateMemo,
+  onCreateMoc,
   onDelete,
   onArchive,
   onShare,
@@ -36,9 +37,11 @@ export default function FilesScreen({
   onArchive: (note: Note) => void;
   onShare: (note: Note) => void;
   onToggleFavorite: (note: Note) => void;
+  onCreateMoc: (title: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [view, setView] = useState<'all' | 'moc'>('all');
   const [fabOpen, setFabOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [modal, setModal] = useState<ModalType>(null);
@@ -61,12 +64,18 @@ export default function FilesScreen({
     if (modal === 'file') onCreate(inputValue.trim(), false);
     else if (modal === 'ai') onCreate(inputValue.trim(), true, selectedAiMode);
     else if (modal === 'memo') onCreateMemo(inputValue.trim());
+    else if (modal === 'moc' as ModalType) onCreateMoc(inputValue.trim());
     closeModal();
   };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = notes.filter((n) => (showArchived ? archived.includes(n.name) : !archived.includes(n.name)));
+    let list = notes.filter((n) => {
+      const isMoc = (n.remotePath ?? n.name).startsWith('moc/');
+      if (view === 'moc') return isMoc;
+      if (showArchived) return archived.includes(n.name);
+      return !archived.includes(n.name) && !isMoc;
+    });
     if (q) {
       list = list.filter(
         (n) => n.name.toLowerCase().includes(q) || n.tags.some((t) => t.toLowerCase().includes(q)),
@@ -78,7 +87,7 @@ export default function FilesScreen({
       if (fa !== fb) return fa - fb;
       return b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [notes, query, archived, favorites, showArchived]);
+  }, [notes, query, archived, favorites, showArchived, view]);
 
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
@@ -114,15 +123,33 @@ export default function FilesScreen({
             </button>
           )}
         </div>
-        <button
-          onClick={() => setShowArchived((v) => !v)}
-          className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs ${
-            showArchived ? 'bg-indigo-500/30 text-indigo-300' : 'bg-white/5 text-gray-400'
-          }`}
-        >
-          <Archive className="h-3 w-3" />
-          {showArchived ? 'アーカイブ表示中' : 'アーカイブを表示'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setView('all'); setShowArchived(false); }}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs ${
+              view === 'all' && !showArchived ? 'bg-indigo-500/30 text-indigo-300' : 'bg-white/5 text-gray-400'
+            }`}
+          >
+            <FileText className="h-3 w-3" /> ノート
+          </button>
+          <button
+            onClick={() => { setView('moc'); setShowArchived(false); }}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs ${
+              view === 'moc' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-white/5 text-gray-400'
+            }`}
+          >
+            🗺 MOC
+          </button>
+          <button
+            onClick={() => { setView('all'); setShowArchived((v) => !v); }}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs ${
+              showArchived ? 'bg-amber-500/30 text-amber-300' : 'bg-white/5 text-gray-400'
+            }`}
+          >
+            <Archive className="h-3 w-3" />
+            {showArchived ? 'アーカイブ中' : 'アーカイブ'}
+          </button>
+        </div>
       </div>
 
       {/* 最近開いたファイルのカルーセル */}
@@ -195,6 +222,15 @@ export default function FilesScreen({
       <div className="absolute bottom-5 right-4 flex flex-col items-end gap-3">
         {fabOpen && (
           <>
+            {view === 'moc' ? (
+              <button
+                onClick={() => openModal('moc')}
+                className="flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg active:bg-emerald-500"
+              >
+                🗺 MOC作成
+              </button>
+            ) : (
+              <>
             <button
               onClick={() => openModal('ai')}
               className="flex items-center gap-2 rounded-full bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg active:bg-violet-500"
@@ -213,6 +249,8 @@ export default function FilesScreen({
             >
               <StickyNote className="h-4 w-4" /> メモ作成
             </button>
+              </>
+            )}
           </>
         )}
         <Fab
@@ -269,6 +307,17 @@ export default function FilesScreen({
           title="メモ作成"
           placeholder={`メモのタイトルを入力...\n（最初の行がタイトルになります）`}
           submitLabel="メモを保存"
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          onClose={closeModal}
+        />
+      )}
+      {modal === 'moc' && (
+        <CreateModal
+          title="MOC作成"
+          placeholder={`MOCのタイトルを入力...\n（Map of Content: ノートを繋ぐ目次ページ）`}
+          submitLabel="MOCを作成"
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleSubmit}

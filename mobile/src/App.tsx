@@ -333,6 +333,27 @@ export default function App() {
     );
   }
 
+  // MOC作成（moc/ フォルダに作成）
+  async function createMoc(title: string) {
+    const clean = title.trim();
+    if (!clean) return;
+    let name = cleanFilename(clean);
+    let counter = 1;
+    while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+      name = cleanFilename(`${clean} (${counter++})`);
+    }
+    const initial = `# ${noteTitle(name)} (MOC)\n\n作成日時: ${new Date().toLocaleString('ja-JP')}\n\n## リンク\n\n- [[関連ノート]]\n`;
+    const remotePath = `moc/${name}`;
+    if (config.gitRemoteUrl) {
+      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+    } else {
+      await writeNote(name, initial);
+    }
+    await refreshNotes();
+    selectNoteForNoteTab({ ...buildNote(name, initial), remotePath });
+    setTab('note');
+  }
+
   // メモ作成（タイトルだけのシンプルノート）
   async function createMemo(title: string) {
     const clean = title.trim();
@@ -744,6 +765,7 @@ export default function App() {
             onOpen={(note) => { selectNoteForNoteTab(note); setTab('note'); }}
             onCreate={createNote}
             onCreateMemo={createMemo}
+            onCreateMoc={createMoc}
             onDelete={deleteNoteAction}
             onArchive={toggleArchive}
             onShare={shareNote}
