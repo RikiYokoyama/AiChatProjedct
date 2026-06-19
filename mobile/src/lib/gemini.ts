@@ -60,6 +60,30 @@ export async function generateNoteTags(apiKey: string, userPrompt: string, aiRep
   }
 }
 
+export interface NoteInfo {
+  name: string;
+  tags: string[];
+  snippet: string;
+}
+
+export async function generateMocContent(apiKey: string, mocTitle: string, noteInfos: NoteInfo[]): Promise<string> {
+  const list = noteInfos
+    .map(n => `- ${n.name.replace(/\.md$/i, '')}${n.tags.length ? ` (タグ: ${n.tags.join(', ')})` : ''}${n.snippet ? ` — ${n.snippet}` : ''}`)
+    .join('\n');
+  const prompt = `あなたはObsidianのMOC（Map of Content）エキスパートです。\n以下のノートリストを分析し、「${mocTitle}」というタイトルのMOCをMarkdown形式で作成してください。\n\n【ルール】\n- 関連するノートをテーマ別にグループ化し、見出し（##）でセクションを分ける\n- 各ノートは必ず [[ノート名]] 形式の内部リンクで記述する\n- 各リンクに1行の簡潔な説明を加える\n- 前置きや説明文は不要。Markdownの本文のみ出力する\n- ノート数が多い場合は重要度の高いものを優先する\n\nノートリスト:\n${list}`;
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+    },
+  );
+  if (!response.ok) throw new Error(`Gemini APIエラー (${response.status})`);
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+}
+
 export async function generateTagsFromContent(apiKey: string, noteContent: string, allTags: string[] = []): Promise<string[]> {
   const tagHint = allTags.length > 0
     ? `\n\n既存のタグ候補（これらの中から適切なものを優先して選び、該当するものがなければ新しく作ってください）:\n${allTags.join(', ')}`

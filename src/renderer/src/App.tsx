@@ -35,7 +35,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import GraphView from './GraphView';
-import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, generateTagsFromContent, SYSTEM_PROMPTS } from './lib/gemini';
+import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, generateTagsFromContent, generateMocContent, NoteInfo, SYSTEM_PROMPTS } from './lib/gemini';
 
 interface CustomPrompt {
   id: string;
@@ -192,6 +192,10 @@ export default function App() {
   const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
   const [showNewNoteModal, setShowNewNoteModal] = useState(false);
   const [newNoteName, setNewNoteName] = useState('Untitled');
+  const [showMocModal, setShowMocModal] = useState(false);
+  const [mocTitle, setMocTitle] = useState('');
+  const [mocAiMode, setMocAiMode] = useState(false);
+  const [isMocGenerating, setIsMocGenerating] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveOk, setSaveOk] = useState(false);
@@ -659,6 +663,52 @@ export default function App() {
         alert(error instanceof Error ? error.message : String(error));
       }
     );
+  }
+
+  async function createMocFromModal(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = mocTitle.trim() || 'MOC';
+    let filename = `moc/${cleanFilename(title)}`;
+    let counter = 1;
+    while (notes.some((n) => n.name.toLowerCase() === filename.toLowerCase())) {
+      filename = `moc/${cleanFilename(`${title} (${counter++})`)}`;
+    }
+    const now = new Date();
+    const formatted = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    let body = `# ${title} (MOC)\n作成日時: ${formatted}\n\n`;
+
+    if (mocAiMode && config.geminiApiKey) {
+      setIsMocGenerating(true);
+      try {
+        const noteInfos: NoteInfo[] = notes
+          .filter(n => !n.name.startsWith('moc/') && !n.name.startsWith('_'))
+          .slice(0, 80) // API負荷軽減
+          .map(n => ({
+            name: n.name.replace(/^.*\//, '').replace(/\.md$/i, ''),
+            tags: n.tags ?? [],
+            snippet: (n.content ?? '').replace(/^#[^\n]*\n/, '').replace(/作成日時:[^\n]*\n?/, '').trim().slice(0, 100),
+          }));
+        const generated = await generateMocContent(config.geminiApiKey, title, noteInfos);
+        body += generated + '\n';
+      } catch (err) {
+        alert('AI MOC生成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+        setIsMocGenerating(false);
+        return;
+      }
+      setIsMocGenerating(false);
+    } else {
+      body += `## リンク\n\n- [[関連ノート]]\n`;
+    }
+
+    const result = await window.electronAPI.saveNote({ filename, content: body });
+    if (!result.success) { alert(result.error ?? '作成失敗'); return; }
+    setShowMocModal(false);
+    setMocTitle('');
+    setMocAiMode(false);
+    await loadNotesList();
+    const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: body };
+    await openNote(note);
+    setEditMode('edit');
   }
 
   function renameNote(note: Note) {
@@ -1390,6 +1440,13 @@ export default function App() {
                   <Plus className="h-4 w-4" />
                   新規ノート作成
                 </button>
+                <button
+                  className="flex w-full items-center justify-center gap-2 rounded bg-emerald-900/60 border border-emerald-700/40 px-3 py-2 font-semibold hover:bg-emerald-800/60 transition-colors text-sm text-emerald-300"
+                  onClick={() => setShowMocModal(true)}
+                >
+                  <Plus className="h-4 w-4" />
+                  🗺 MOC作成
+                </button>
                 <div className="relative flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
                   <Search className="h-4 w-4 text-gray-500" />
                   <input
@@ -1973,6 +2030,54 @@ export default function App() {
             </div>
 
             <button className="w-full rounded bg-indigo-500 px-4 py-2 font-semibold hover:bg-indigo-400">保存</button>
+          </form>
+        </div>
+      )}
+
+      {/* MOC作成モーダル */}
+      {showMocModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form className="w-full max-w-md rounded-lg border border-emerald-800/40 bg-[#101827] p-5 shadow-xl" onSubmit={createMocFromModal}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-emerald-300">🗺 MOC作成</h2>
+              <button type="button" className="rounded p-2 hover:bg-white/10" onClick={() => { setShowMocModal(false); setMocTitle(''); setMocAiMode(false); }}>✕</button>
+            </div>
+            <label className="mb-3 block text-sm text-gray-300">
+              MOCのタイトル
+              <input
+                autoFocus
+                className="mt-1 w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-white outline-none"
+                value={mocTitle}
+                onChange={(e) => setMocTitle(e.target.value)}
+                placeholder="例: 開発ノートまとめ"
+              />
+            </label>
+            <label className="mb-4 flex cursor-pointer items-center gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                className="rounded"
+                checked={mocAiMode}
+                onChange={(e) => setMocAiMode(e.target.checked)}
+              />
+              <span>AIで自動生成する（既存ノートを分析してリンクを作成）</span>
+            </label>
+            {mocAiMode && (
+              <p className="mb-4 rounded bg-emerald-900/30 px-3 py-2 text-xs text-emerald-400">
+                最大80件のノートをGeminiで分析し、テーマ別にグループ化したMOCを自動生成します。
+              </p>
+            )}
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                disabled={isMocGenerating || !mocTitle.trim()}
+                className="flex-1 rounded bg-emerald-700 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {isMocGenerating ? 'AI生成中...' : 'MOCを作成'}
+              </button>
+              <button type="button" className="rounded border border-white/10 px-4 py-2 text-sm text-gray-400 hover:bg-white/5" onClick={() => { setShowMocModal(false); setMocTitle(''); setMocAiMode(false); }}>
+                キャンセル
+              </button>
+            </div>
           </form>
         </div>
       )}

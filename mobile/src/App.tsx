@@ -34,6 +34,8 @@ import {
   generateNoteTags,
   generateTagsFromContent,
   generateNoteTitle,
+  generateMocContent,
+  NoteInfo,
 } from './lib/gemini';
 import {
   syncNotes,
@@ -355,8 +357,8 @@ export default function App() {
     );
   }
 
-  // MOC作成（moc/ フォルダに作成）
-  async function createMoc(title: string) {
+  // MOC作成（moc/ フォルダに作成）useAi=true のとき AI で本文生成
+  async function createMoc(title: string, useAi = false) {
     const clean = title.trim();
     if (!clean) return;
     let name = cleanFilename(clean);
@@ -364,15 +366,37 @@ export default function App() {
     while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
       name = cleanFilename(`${clean} (${counter++})`);
     }
-    const initial = `# ${noteTitle(name)} (MOC)\n\n作成日時: ${new Date().toLocaleString('ja-JP')}\n\n## リンク\n\n- [[関連ノート]]\n`;
+    const now = new Date().toLocaleString('ja-JP');
+    let body = `# ${noteTitle(name)} (MOC)\n\n作成日時: ${now}\n\n`;
+
+    if (useAi && config.geminiApiKey) {
+      try {
+        const noteInfos: NoteInfo[] = notes
+          .filter(n => !(n.remotePath ?? n.name).startsWith('moc/'))
+          .slice(0, 80)
+          .map(n => ({
+            name: n.name.replace(/\.md$/i, ''),
+            tags: n.tags ?? [],
+            snippet: (n.content ?? '').replace(/^#[^\n]*\n/, '').replace(/作成日時:[^\n]*\n?/, '').trim().slice(0, 100),
+          }));
+        const generated = await generateMocContent(config.geminiApiKey, noteTitle(name), noteInfos);
+        body += generated + '\n';
+      } catch (err) {
+        alert('AI MOC生成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+        body += `## リンク\n\n- [[関連ノート]]\n`;
+      }
+    } else {
+      body += `## リンク\n\n- [[関連ノート]]\n`;
+    }
+
     const remotePath = `moc/${name}`;
     if (config.gitRemoteUrl) {
-      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, body);
     } else {
-      await writeNote(name, initial);
+      await writeNote(name, body);
     }
     await refreshNotes();
-    selectNoteForNoteTab({ ...buildNote(name, initial), remotePath });
+    selectNoteForNoteTab({ ...buildNote(name, body), remotePath });
     setTab('note');
   }
 

@@ -37,7 +37,7 @@ export default function FilesScreen({
   onArchive: (note: Note) => void;
   onShare: (note: Note) => void;
   onToggleFavorite: (note: Note) => void;
-  onCreateMoc: (title: string) => void;
+  onCreateMoc: (title: string, useAi?: boolean) => void;
 }) {
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -48,6 +48,7 @@ export default function FilesScreen({
   const [modal, setModal] = useState<ModalType>(null);
   const [inputValue, setInputValue] = useState('');
   const [selectedAiMode, setSelectedAiMode] = useState('long-explain');
+  const [mocUseAi, setMocUseAi] = useState(false);
 
   const openModal = (type: ModalType) => {
     setModal(type);
@@ -65,7 +66,7 @@ export default function FilesScreen({
     if (modal === 'file') onCreate(inputValue.trim(), false);
     else if (modal === 'ai') onCreate(inputValue.trim(), true, selectedAiMode);
     else if (modal === 'memo') onCreateMemo(inputValue.trim());
-    else if (modal === 'moc' as ModalType) onCreateMoc(inputValue.trim());
+    else if (modal === 'moc' as ModalType) onCreateMoc(inputValue.trim(), mocUseAi);
     closeModal();
   };
 
@@ -335,12 +336,27 @@ export default function FilesScreen({
         <CreateModal
           title="MOC作成"
           placeholder={`MOCのタイトルを入力...\n（Map of Content: ノートを繋ぐ目次ページ）`}
-          submitLabel="MOCを作成"
+          submitLabel={mocUseAi ? 'AIで生成する' : 'MOCを作成'}
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleSubmit}
-          onClose={closeModal}
-        />
+          onClose={() => { closeModal(); setMocUseAi(false); }}
+        >
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={mocUseAi}
+              onChange={(e) => setMocUseAi(e.target.checked)}
+              className="rounded"
+            />
+            <span>AIで自動生成する（既存ノートを分析）</span>
+          </label>
+          {mocUseAi && (
+            <p className="mt-1 rounded bg-emerald-900/30 px-2 py-1.5 text-xs text-emerald-400">
+              Geminiが全ノートを分析し、テーマ別にリンクを自動生成します
+            </p>
+          )}
+        </CreateModal>
       )}
     </div>
   );
