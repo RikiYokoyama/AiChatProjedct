@@ -1114,7 +1114,7 @@ export default function App() {
     const result = await window.electronAPI.runMigration();
     if (result.skipped) { setShowMigrationDialog(false); return; }
     if (result.success) {
-      setMigrationLog(`${result.moved.length}件のファイルを notes/ フォルダへ移行しました。`);
+      setMigrationLog(`${(result.moved ?? []).length}件のファイルを notes/ フォルダへ移行しました。`);
       setMigrationStatus('done');
       await loadNotesList();
     } else {

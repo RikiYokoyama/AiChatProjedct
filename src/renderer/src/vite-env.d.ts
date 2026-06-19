@@ -48,5 +48,11 @@ interface Window {
       '2d'?: typeof defaultSettings;
       '3d'?: typeof defaultSettings;
     }) => Promise<{ success: boolean; error?: string }>;
+    readMasterTags: () => Promise<string[]>;
+    saveMasterTags: (tags: string[]) => Promise<{ success: boolean; error?: string }>;
+    updateIndex: () => Promise<{ success: boolean }>;
+    checkMigration: () => Promise<{ done: boolean }>;
+    runMigration: () => Promise<{ success?: boolean; skipped?: boolean; moved?: string[]; error?: string }>;
+    startupGitPull: () => Promise<{ success: boolean; skipped?: boolean; error?: string }>;
   };
 }
