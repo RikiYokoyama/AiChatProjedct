@@ -45,6 +45,18 @@ export async function saveConfig(config: AppConfig): Promise<void> {
   await Preferences.set({ key: 'app-config', value: JSON.stringify(config) });
 }
 
+// ---------- マスタータグリスト ----------
+
+export async function loadMasterTags(): Promise<string[]> {
+  const { value } = await Preferences.get({ key: 'master-tags' });
+  if (!value) return [];
+  try { return JSON.parse(value); } catch { return []; }
+}
+
+export async function saveMasterTagsLocal(tags: string[]): Promise<void> {
+  await Preferences.set({ key: 'master-tags', value: JSON.stringify(tags) });
+}
+
 // ---------- ノートメタデータ（お気に入り・アーカイブ） ----------
 
 interface NoteMeta {

@@ -14,6 +14,8 @@ import {
   deleteNote as removeNote,
   loadNoteMeta,
   saveNoteMeta,
+  loadMasterTags,
+  saveMasterTagsLocal,
 } from './lib/storage';
 import {
   Note,
@@ -33,7 +35,7 @@ import {
   generateTagsFromContent,
   generateNoteTitle,
 } from './lib/gemini';
-import { syncNotes } from './lib/githubSync';
+import { syncNotes, readMasterTagsFromGitHub, writeMasterTagsToGitHub } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
   'deep-think': '思考整理',
@@ -46,6 +48,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('files');
   const [notes, setNotes] = useState<Note[]>([]);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
+  const [masterTags, setMasterTags] = useState<string[]>([]);
 
   // ノートタブ（NoteScreen）用
   const [noteTabSelectedName, setNoteTabSelectedName] = useState<string | null>(null);
@@ -96,6 +99,18 @@ export default function App() {
       const list = await listNotes();
       setNotes(list);
       if (!cfg.geminiApiKey) setTab('settings');
+      // マスタータグをキャッシュから読み込み、GitHubから最新を取得
+      const cachedTags = await loadMasterTags();
+      setMasterTags(cachedTags);
+      if (cfg.gitRemoteUrl) {
+        readMasterTagsFromGitHub(cfg.gitRemoteUrl).then((remoteTags) => {
+          if (remoteTags.length > 0) {
+            const merged = Array.from(new Set([...cachedTags, ...remoteTags]));
+            setMasterTags(merged);
+            saveMasterTagsLocal(merged);
+          }
+        }).catch(() => {});
+      }
       if (cfg.autoSync && cfg.gitRemoteUrl) {
         runSync(cfg);
       }
@@ -344,10 +359,15 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const allTags = Array.from(new Set(notes.flatMap((n) => n.tags)));
-      const tags = await generateTagsFromContent(config.geminiApiKey, body, allTags);
+      const tags = await generateTagsFromContent(config.geminiApiKey, body, masterTags);
       const current = targetNote?.tags ?? [];
       await updateTags(targetName, body, Array.from(new Set([...current, ...tags])));
+      if (tags.length > 0) {
+        const nextMasterTags = Array.from(new Set([...masterTags, ...tags]));
+        setMasterTags(nextMasterTags);
+        saveMasterTagsLocal(nextMasterTags);
+        writeMasterTagsToGitHub(config.gitRemoteUrl, nextMasterTags).catch(() => {});
+      }
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 1500);
       return;
@@ -428,6 +448,12 @@ export default function App() {
     setAutoSaveStatus('saving');
     try {
       const extracted = await generateNoteTags(config.geminiApiKey, userPrompt, aiReply);
+      if (extracted.length > 0) {
+        const nextMasterTags = Array.from(new Set([...masterTags, ...extracted]));
+        setMasterTags(nextMasterTags);
+        saveMasterTagsLocal(nextMasterTags);
+        writeMasterTagsToGitHub(config.gitRemoteUrl, nextMasterTags).catch(() => {});
+      }
 
       // 対象ファイルが開かれている場合はそこに追記
       const targetName = contextName;

@@ -147,6 +147,25 @@ export class GitHubSync {
     }
   }
 
+  async readMasterTags(): Promise<string[]> {
+    try {
+      const file = await this.fetchRemoteFile('_master_tags.json');
+      const data = JSON.parse(file.content);
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async writeMasterTags(tags: string[]): Promise<void> {
+    try {
+      const file = await this.fetchRemoteFile('_master_tags.json');
+      await this.putFile('_master_tags.json', JSON.stringify(tags, null, 2), file.sha);
+    } catch {
+      await this.putFile('_master_tags.json', JSON.stringify(tags, null, 2));
+    }
+  }
+
   // 新しいアーカイブ用パスを生成する (例: archive/YYYY-MM/name.md)
   private generateArchivePath(name: string): string {
     const now = new Date();
@@ -277,4 +296,16 @@ function parseRemoteUrl(url: string): { token: string; repo: string; branch: str
 export async function syncNotes(gitRemoteUrl: string): Promise<SyncResult> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   return new GitHubSync(token, repo, branch).sync();
+}
+
+export async function readMasterTagsFromGitHub(gitRemoteUrl: string): Promise<string[]> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return [];
+  return new GitHubSync(token, repo, branch).readMasterTags();
+}
+
+export async function writeMasterTagsToGitHub(gitRemoteUrl: string, tags: string[]): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return;
+  return new GitHubSync(token, repo, branch).writeMasterTags(tags);
 }

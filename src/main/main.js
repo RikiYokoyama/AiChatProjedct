@@ -814,6 +814,33 @@ function cleanHtmlToText(html) {
   return clean.trim();
 }
 
+// マスタータグリストの読み書き
+ipcMain.handle('read-master-tags', async () => {
+  try {
+    const notesPath = appConfig.notesPath;
+    if (!notesPath) return [];
+    const filePath = path.join(notesPath, '_master_tags.json');
+    if (!fs.existsSync(filePath)) return [];
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('save-master-tags', async (event, tags) => {
+  try {
+    const notesPath = appConfig.notesPath;
+    if (!notesPath) return { success: false };
+    if (!fs.existsSync(notesPath)) fs.mkdirSync(notesPath, { recursive: true });
+    const filePath = path.join(notesPath, '_master_tags.json');
+    fs.writeFileSync(filePath, JSON.stringify(tags, null, 2), 'utf8');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // URLのWebページをフェッチしてクリーンなテキストを返すハンドラー
 ipcMain.handle('fetch-url-text', async (event, url) => {
   try {

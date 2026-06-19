@@ -183,6 +183,7 @@ export default function App() {
     return () => window.removeEventListener('click', handleCloseMenu);
   }, []);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
+  const [masterTags, setMasterTags] = useState<string[]>([]);
   const [ribbonView, setRibbonView] = useState<RibbonView>('notes');
   const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
   const [showNewNoteModal, setShowNewNoteModal] = useState(false);
@@ -893,6 +894,11 @@ export default function App() {
       if (selectedNote) {
         const currentTags = selectedNote.tags || [];
         const nextTags = Array.from(new Set([...currentTags, ...extracted]));
+        if (extracted.length > 0) {
+          const nextMasterTags = Array.from(new Set([...masterTags, ...extracted]));
+          setMasterTags(nextMasterTags);
+          window.electronAPI.saveMasterTags(nextMasterTags);
+        }
 
         await window.electronAPI.appendToNote({ filename: selectedNote.name, appendContent: block });
         const noteContent = await window.electronAPI.readNote(selectedNote.name);
@@ -988,8 +994,7 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const allTags = Array.from(new Set(notes.flatMap((n) => n.tags)));
-      const tags = await generateTagsFromContent(config.geminiApiKey, body, allTags);
+      const tags = await generateTagsFromContent(config.geminiApiKey, body, masterTags);
       const current = selectedNote.tags || [];
       const nextTags = Array.from(new Set([...current, ...tags]));
       const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
@@ -1001,6 +1006,9 @@ export default function App() {
       setContent(nextContent);
       setNoteContext(nextContent);
       setSelectedNote((prev) => prev ? { ...prev, tags: nextTags, content: nextContent } : null);
+      const nextMasterTags = Array.from(new Set([...masterTags, ...tags]));
+      setMasterTags(nextMasterTags);
+      await window.electronAPI.saveMasterTags(nextMasterTags);
       await loadNotesList();
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 1500);
@@ -1066,6 +1074,7 @@ export default function App() {
       setConfig(loaded);
       if (!loaded.geminiApiKey) setRibbonView('settings');
     });
+    window.electronAPI.readMasterTags().then((tags) => setMasterTags(tags));
     loadNotesList();
     const unsubscribe = window.electronAPI.onGitStatusChanged((status, error) => {
       setGitStatus(status);
