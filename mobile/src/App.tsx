@@ -120,14 +120,7 @@ export default function App() {
         // GitHub 直接アクセス: _index.json からノートリストを取得
         try {
           const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
-          const remoteNotes = remoteList.map(r => buildNote(r.name, '', r.updatedAt) as Note & { remotePath: string; sha: string });
-          // remotePath と sha を付与
-          const withMeta: Note[] = remoteList.map(r => ({
-            ...buildNote(r.name, '', r.updatedAt),
-            remotePath: r.remotePath,
-            sha: r.sha,
-          }));
-          setNotes(withMeta);
+          mergeRemoteNotes(remoteList);
         } catch {
           // GitHub 取得失敗時はローカルストレージにフォールバック
           setNotes(await listNotes());
@@ -149,22 +142,35 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // リモートリストと現在の state をマージ（sha・content は現在値を優先）
+  const mergeRemoteNotes = useCallback((remoteList: { name: string; remotePath: string; sha: string; updatedAt: string }[]) => {
+    setNotes(prev => {
+      const prevMap = new Map(prev.map(n => [n.name, n]));
+      return remoteList.map(r => {
+        const existing = prevMap.get(r.name);
+        return {
+          ...buildNote(r.name, existing?.content ?? '', r.updatedAt),
+          remotePath: r.remotePath,
+          // 既存の sha（fetchNoteContentFromGitHub で取得済みの値）を優先
+          sha: existing?.sha || r.sha,
+          favorite: existing?.favorite,
+          archived: existing?.archived,
+        } as Note;
+      });
+    });
+  }, []);
+
   const refreshNotes = useCallback(async () => {
     const cfg = configRef.current;
     if (cfg.gitRemoteUrl) {
       try {
         const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
-        const withMeta: Note[] = remoteList.map(r => ({
-          ...buildNote(r.name, '', r.updatedAt),
-          remotePath: r.remotePath,
-          sha: r.sha,
-        }));
-        setNotes(withMeta);
+        mergeRemoteNotes(remoteList);
         return;
       } catch { /* fall through to local */ }
     }
     setNotes(await listNotes());
-  }, []);
+  }, [mergeRemoteNotes]);
 
   // ---------- アプリ復帰時自動更新（Phase 8） ----------
   useEffect(() => {
@@ -182,12 +188,7 @@ export default function App() {
         // GitHub 直接アクセス: _index.json を再取得してノートリストを更新
         try {
           const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
-          const withMeta: Note[] = remoteList.map(r => ({
-            ...buildNote(r.name, '', r.updatedAt),
-            remotePath: r.remotePath,
-            sha: r.sha,
-          }));
-          setNotes(withMeta);
+          mergeRemoteNotes(remoteList);
         } catch { /* silent */ }
       } else if (cfg.autoSync) {
         // ローカルストレージ + 旧来の sync
@@ -201,7 +202,7 @@ export default function App() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mergeRemoteNotes]);
 
   // ノートタブ 自動保存
   useEffect(() => {
