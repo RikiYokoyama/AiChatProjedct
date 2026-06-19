@@ -42,6 +42,7 @@ export default function FilesScreen({
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [view, setView] = useState<'all' | 'moc'>('all');
+  const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'>('date-desc');
   const [fabOpen, setFabOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [modal, setModal] = useState<ModalType>(null);
@@ -85,9 +86,12 @@ export default function FilesScreen({
       const fa = favorites.includes(a.name) ? 0 : 1;
       const fb = favorites.includes(b.name) ? 0 : 1;
       if (fa !== fb) return fa - fb;
+      if (sortBy === 'name-asc') return a.name.localeCompare(b.name, 'ja');
+      if (sortBy === 'name-desc') return b.name.localeCompare(a.name, 'ja');
+      if (sortBy === 'date-asc') return a.updatedAt.localeCompare(b.updatedAt);
       return b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [notes, query, archived, favorites, showArchived, view]);
+  }, [notes, query, archived, favorites, showArchived, view, sortBy]);
 
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
@@ -149,6 +153,20 @@ export default function FilesScreen({
             <Archive className="h-3 w-3" />
             {showArchived ? 'アーカイブ中' : 'アーカイブ'}
           </button>
+        </div>
+        {/* 並べ替え + ファイル数 */}
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>{filtered.length}<span className="text-gray-600">/{notes.filter(n => !(n.remotePath ?? n.name).startsWith('moc/')).length}件</span></span>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+            className="rounded border border-white/10 bg-black/30 px-2 py-1 text-xs text-gray-300 outline-none"
+          >
+            <option value="date-desc">新しい順</option>
+            <option value="date-asc">古い順</option>
+            <option value="name-asc">名前 A-Z</option>
+            <option value="name-desc">名前 Z-A</option>
+          </select>
         </div>
       </div>
 

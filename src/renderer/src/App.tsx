@@ -6,7 +6,6 @@ import {
   Edit3,
   Eye,
   FileText,
-  FolderOpen,
   GitBranch,
   Loader2,
   Network,
@@ -876,10 +875,6 @@ export default function App() {
     await loadNotesList();
   }
 
-  async function chooseNotesFolder() {
-    const folder = await window.electronAPI.openDirectoryDialog();
-    if (folder) setConfig((prev) => ({ ...prev, notesPath: folder }));
-  }
 
   async function syncGit() {
     setGitStatus('syncing');
@@ -1448,7 +1443,7 @@ export default function App() {
                   )}
                 </div>
                 <div className="flex items-center justify-between border-b border-white/5 pb-2 text-xs text-gray-400 px-1">
-                  <span>並び替え:</span>
+                  <span className="text-gray-500">{filteredNotes.length}<span className="text-gray-600">/{notes.length}件</span></span>
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as any)}
@@ -1901,19 +1896,6 @@ export default function App() {
                 value={config.geminiApiKey}
                 onChange={(e) => setConfig((prev) => ({ ...prev, geminiApiKey: e.target.value }))}
               />
-            </label>
-            <label className="mb-3 block text-sm">
-              <span className="mb-1 block text-gray-300">ノート保存先</span>
-              <div className="flex gap-2">
-                <input
-                  className="min-w-0 flex-1 rounded bg-black/30 px-3 py-2 outline-none"
-                  value={config.notesPath}
-                  onChange={(e) => setConfig((prev) => ({ ...prev, notesPath: e.target.value }))}
-                />
-                <button type="button" className="rounded bg-white/10 px-3 hover:bg-white/15" onClick={chooseNotesFolder}>
-                  <FolderOpen className="h-4 w-4" />
-                </button>
-              </div>
             </label>
             <label className="mb-4 block text-sm">
               <span className="mb-1 block text-gray-300">GitリモートURL</span>
