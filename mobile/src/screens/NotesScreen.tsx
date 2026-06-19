@@ -203,7 +203,7 @@ export default function FilesScreen({
                       note={note}
                       isActive={selectedName === note.name}
                       isFavorite={favorites.includes(note.name)}
-                      isEmpty={isEmptyNote(note.content)}
+                      isEmpty={note.content !== '' && isEmptyNote(note.content)}
                       onOpen={() => onOpen(note)}
                       onDelete={() => onDelete(note)}
                       onArchive={() => onArchive(note)}
