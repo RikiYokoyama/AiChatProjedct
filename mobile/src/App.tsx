@@ -94,6 +94,10 @@ export default function App() {
   configRef.current = config;
   const runSyncRef = useRef<(cfg?: AppConfig) => Promise<void>>(async () => {});
 
+  // notesの最新値をrefで保持（auto-saveのstale closure対策）
+  const notesRef = useRef<Note[]>(notes);
+  notesRef.current = notes;
+
   // 自動sync間隔（5分）
   const lastAutoSyncRef = useRef<number>(0);
   const MIN_AUTO_SYNC_MS = 5 * 60 * 1000;
@@ -207,7 +211,7 @@ export default function App() {
       const content = noteTabContentRef.current;
       if (cfg.gitRemoteUrl) {
         // GitHub 直接書き込み
-        const note = notes.find(n => n.name === noteTabSelectedName);
+        const note = notesRef.current.find(n => n.name === noteTabSelectedName);
         const remotePath = note?.remotePath ?? `notes/${noteTabSelectedName}`;
         try {
           const newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, content, note?.sha);
@@ -270,15 +274,16 @@ export default function App() {
     }
     const initial = initialNoteContent(noteTitle(name));
     const remotePath = `notes/${name}`;
+    let newSha: string | undefined;
     if (config.gitRemoteUrl) {
-      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+      newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
     } else {
       await writeNote(name, initial);
     }
-    await refreshNotes();
 
-    // ノートタブで開く
-    const newNote = { ...buildNote(name, initial), remotePath };
+    // state に直接追加（refreshNotes は _index.json が古いため不可）
+    const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
+    setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);
     setTab('note');
     setChatHistory([]);
@@ -390,13 +395,15 @@ export default function App() {
     }
 
     const remotePath = `moc/${name}`;
+    let newSha: string | undefined;
     if (config.gitRemoteUrl) {
-      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, body);
+      newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, body);
     } else {
       await writeNote(name, body);
     }
-    await refreshNotes();
-    selectNoteForNoteTab({ ...buildNote(name, body), remotePath });
+    const newNote: Note = { ...buildNote(name, body), remotePath, sha: newSha };
+    setNotes(prev => [...prev, newNote]);
+    selectNoteForNoteTab(newNote);
     setTab('note');
   }
 
@@ -412,13 +419,15 @@ export default function App() {
     const now = new Date().toLocaleString('ja-JP');
     const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
     const remotePath = `memos/${name}`;
+    let newSha: string | undefined;
     if (config.gitRemoteUrl) {
-      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+      newSha = await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
     } else {
       await writeNote(name, initial);
     }
-    await refreshNotes();
-    selectNoteForNoteTab({ ...buildNote(name, initial), remotePath });
+    const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
+    setNotes(prev => [...prev, newNote]);
+    selectNoteForNoteTab(newNote);
     setTab('note');
   }
 
