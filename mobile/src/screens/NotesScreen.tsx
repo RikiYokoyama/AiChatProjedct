@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Archive, FileText, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
 import { Note, isEmptyNote, noteTitle } from '../lib/notes';
 import SwipeableNoteRow from '../components/SwipeableNoteRow';
@@ -39,6 +40,7 @@ export default function FilesScreen({
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [fabOpen, setFabOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
   const [modal, setModal] = useState<ModalType>(null);
   const [inputValue, setInputValue] = useState('');
   const [selectedAiMode, setSelectedAiMode] = useState('long-explain');
@@ -77,6 +79,13 @@ export default function FilesScreen({
       return b.updatedAt.localeCompare(a.updatedAt);
     });
   }, [notes, query, archived, favorites, showArchived]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 72,
+    overscan: 5,
+  });
 
   const recentNotes = useMemo(
     () =>
@@ -141,27 +150,44 @@ export default function FilesScreen({
         </div>
       )}
 
-      {/* ファイル一覧 */}
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 pb-28">
+      {/* ファイル一覧（仮想スクロール） */}
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-28">
         {filtered.length === 0 ? (
           <div className="py-12 text-center text-sm text-gray-500">
             {showArchived ? 'アーカイブされたファイルはありません' : 'ファイルがありません。右下の＋から作成できます'}
           </div>
         ) : (
-          filtered.map((note) => (
-            <SwipeableNoteRow
-              key={note.name}
-              note={note}
-              isActive={selectedName === note.name}
-              isFavorite={favorites.includes(note.name)}
-              isEmpty={isEmptyNote(note.content)}
-              onOpen={() => onOpen(note)}
-              onDelete={() => onDelete(note)}
-              onArchive={() => onArchive(note)}
-              onShare={() => onShare(note)}
-              onToggleFavorite={() => onToggleFavorite(note)}
-            />
-          ))
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const note = filtered[virtualRow.index];
+              return (
+                <div
+                  key={note.name}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <div className="mb-1.5">
+                    <SwipeableNoteRow
+                      note={note}
+                      isActive={selectedName === note.name}
+                      isFavorite={favorites.includes(note.name)}
+                      isEmpty={isEmptyNote(note.content)}
+                      onOpen={() => onOpen(note)}
+                      onDelete={() => onDelete(note)}
+                      onArchive={() => onArchive(note)}
+                      onShare={() => onShare(note)}
+                      onToggleFavorite={() => onToggleFavorite(note)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
