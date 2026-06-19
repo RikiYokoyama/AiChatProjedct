@@ -344,7 +344,8 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const tags = await generateTagsFromContent(config.geminiApiKey, body);
+      const allTags = Array.from(new Set(notes.flatMap((n) => n.tags)));
+      const tags = await generateTagsFromContent(config.geminiApiKey, body, allTags);
       const current = targetNote?.tags ?? [];
       await updateTags(targetName, body, Array.from(new Set([...current, ...tags])));
       setAutoSaveStatus('saved');

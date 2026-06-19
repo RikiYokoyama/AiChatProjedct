@@ -60,8 +60,11 @@ export async function generateNoteTags(apiKey: string, userPrompt: string, aiRep
   }
 }
 
-export async function generateTagsFromContent(apiKey: string, noteContent: string): Promise<string[]> {
-  const prompt = `以下のノート本文を読み、内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発\n\n${noteContent.slice(0, 1500)}`;
+export async function generateTagsFromContent(apiKey: string, noteContent: string, allTags: string[] = []): Promise<string[]> {
+  const tagHint = allTags.length > 0
+    ? `\n\n既存のタグ候補（これらの中から適切なものを優先して選び、該当するものがなければ新しく作ってください）:\n${allTags.join(', ')}`
+    : '';
+  const prompt = `以下のノート本文を読み、内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発${tagHint}\n\n${noteContent.slice(0, 4000)}`;
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
