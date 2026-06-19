@@ -282,7 +282,37 @@ export class GitHubSync {
     }
 
     await saveSyncState(state);
+
+    // _index.json を生成してGitHubへpush
+    await this.updateRemoteIndex(state);
+
     return result;
+  }
+
+  private async updateRemoteIndex(state: SyncState): Promise<void> {
+    try {
+      // 現在のリモートファイル一覧を再取得してインデックスを生成
+      const remoteList = await this.fetchRemoteList();
+      const index = remoteList
+        .filter(f => !f.name.startsWith('_'))
+        .map(f => ({
+          name: f.name,
+          path: f.path,
+          sha: f.sha,
+          updatedAt: new Date().toISOString(),
+          remotePath: state.remotePaths[f.name] ?? f.path,
+          isMoc: f.path.startsWith('moc/'),
+        }));
+      const content = JSON.stringify(index, null, 2);
+      try {
+        const existing = await this.fetchRemoteFile('_index.json');
+        await this.putFile('_index.json', content, existing.sha);
+      } catch {
+        await this.putFile('_index.json', content);
+      }
+    } catch (err) {
+      console.error('Failed to update remote index:', err);
+    }
   }
 }
 

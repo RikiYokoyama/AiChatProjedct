@@ -710,7 +710,7 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
     const filePath = resolveNotePath(notesPath, filename);
 
     fs.writeFileSync(filePath, content, 'utf8');
-
+    updateIndex();
     return { success: true, path: filePath };
   } catch (err) {
     console.error('Failed to save note:', err);
@@ -732,9 +732,7 @@ ipcMain.handle('rename-note', async (event, { oldFilename, newFilename }) => {
     }
 
     fs.renameSync(oldPath, newPath);
-
-
-
+    updateIndex();
     return { success: true, path: newPath };
   } catch (err) {
     console.error('Failed to rename note:', err);
@@ -752,6 +750,7 @@ ipcMain.handle('delete-note', async (event, filename) => {
     }
 
     fs.unlinkSync(filePath);
+    updateIndex();
     return { success: true };
   } catch (err) {
     console.error('Failed to delete note:', err);
@@ -813,6 +812,36 @@ function cleanHtmlToText(html) {
   
   return clean.trim();
 }
+
+// _index.json を生成・保存（ノート操作後に呼ぶ）
+async function updateIndex() {
+  try {
+    const notesPath = appConfig.notesPath;
+    if (!notesPath || !fs.existsSync(notesPath)) return;
+    const cache = loadMetadataCache();
+    const cacheUpdated = { value: false };
+    const files = await getAllMarkdownFiles(notesPath, notesPath, cache, cacheUpdated);
+    if (cacheUpdated.value) saveMetadataCache(cache);
+    // _index.json / _master_tags.json 自体は除外
+    const index = files
+      .filter(f => !f.name.startsWith('_'))
+      .map(f => ({
+        name: f.name,
+        tags: f.tags,
+        updatedAt: f.updatedAt,
+        isEmpty: f.isEmpty ?? false,
+        isMoc: f.name.startsWith('moc/'),
+      }));
+    fs.writeFileSync(path.join(notesPath, '_index.json'), JSON.stringify(index, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to update index:', err);
+  }
+}
+
+ipcMain.handle('update-index', async () => {
+  await updateIndex();
+  return { success: true };
+});
 
 // マスタータグリストの読み書き
 ipcMain.handle('read-master-tags', async () => {

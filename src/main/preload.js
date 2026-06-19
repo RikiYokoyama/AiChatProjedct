@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchUrlText: (url) => ipcRenderer.invoke('fetch-url-text', url),
   readMasterTags: () => ipcRenderer.invoke('read-master-tags'),
   saveMasterTags: (tags) => ipcRenderer.invoke('save-master-tags', tags),
+  updateIndex: () => ipcRenderer.invoke('update-index'),
   appendToNote: (data) => ipcRenderer.invoke('append-to-note', data),
   loadGraphSettings: () => ipcRenderer.invoke('load-graph-settings'),
   saveGraphSettings: (settings) => ipcRenderer.invoke('save-graph-settings', settings),
