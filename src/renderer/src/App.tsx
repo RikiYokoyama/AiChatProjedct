@@ -184,6 +184,8 @@ export default function App() {
   }, []);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [masterTags, setMasterTags] = useState<string[]>([]);
+  const [startupPulling, setStartupPulling] = useState(true);
+  const [startupPullError, setStartupPullError] = useState<string | null>(null);
   const [showMigrationDialog, setShowMigrationDialog] = useState(false);
   const [migrationStatus, setMigrationStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [migrationLog, setMigrationLog] = useState<string>('');
@@ -1078,10 +1080,15 @@ export default function App() {
       if (!loaded.geminiApiKey) setRibbonView('settings');
     });
     window.electronAPI.readMasterTags().then((tags) => setMasterTags(tags));
-    window.electronAPI.checkMigration().then(({ done }) => {
-      if (!done) setShowMigrationDialog(true);
+    // 起動時 git pull → 完了後にノートリスト読み込み
+    window.electronAPI.startupGitPull().then((res) => {
+      if (!res.success && !res.skipped) setStartupPullError(res.error ?? null);
+      setStartupPulling(false);
+      loadNotesList();
+      window.electronAPI.checkMigration().then(({ done }) => {
+        if (!done) setShowMigrationDialog(true);
+      });
     });
-    loadNotesList();
     const unsubscribe = window.electronAPI.onGitStatusChanged((status, error) => {
       setGitStatus(status);
       setGitError(error ?? null);
@@ -1118,6 +1125,23 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#070a13] text-gray-100">
+      {/* 起動時 git pull ローディング画面 */}
+      {startupPulling && (
+        <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-[#070a13]">
+          <div className="mb-4 text-2xl font-bold text-gray-200">📄 AIチャットノート</div>
+          <div className="mb-2 flex items-center gap-2 text-sm text-gray-400">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-indigo-400 border-t-transparent" />
+            GitHubから最新データを取得中...
+          </div>
+        </div>
+      )}
+      {/* pull エラーバナー（操作は続行可能） */}
+      {!startupPulling && startupPullError && (
+        <div className="flex shrink-0 items-center justify-between bg-amber-900/60 px-4 py-1 text-xs text-amber-300">
+          <span>起動時の同期に失敗しました: {startupPullError}</span>
+          <button onClick={() => setStartupPullError(null)} className="ml-4 text-amber-400 hover:text-white">✕</button>
+        </div>
+      )}
       {/* フォルダ移行ダイアログ */}
       {showMigrationDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">

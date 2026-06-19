@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateIndex: () => ipcRenderer.invoke('update-index'),
   checkMigration: () => ipcRenderer.invoke('check-migration'),
   runMigration: () => ipcRenderer.invoke('run-migration'),
+  startupGitPull: () => ipcRenderer.invoke('startup-git-pull'),
   appendToNote: (data) => ipcRenderer.invoke('append-to-note', data),
   loadGraphSettings: () => ipcRenderer.invoke('load-graph-settings'),
   saveGraphSettings: (settings) => ipcRenderer.invoke('save-graph-settings', settings),

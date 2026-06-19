@@ -775,6 +775,30 @@ ipcMain.handle('append-to-note', async (event, { filename, appendContent }) => {
 
 ipcMain.handle('sync-git', async () => runGitSync());
 
+// 起動時の git pull のみ（push しない）
+ipcMain.handle('startup-git-pull', async () => {
+  const notesPath = appConfig.notesPath;
+  if (!notesPath || !appConfig.gitRemoteUrl) return { success: true, skipped: true };
+  if (!fs.existsSync(notesPath)) return { success: true, skipped: true };
+  try {
+    const git = simpleGit(notesPath);
+    const isRepo = await git.checkIsRepo();
+    if (!isRepo) return { success: true, skipped: true };
+    let branchName = 'main';
+    try {
+      const branches = await git.branch();
+      const raw = branches.current || '';
+      branchName = /^[a-zA-Z0-9/_.-]+$/.test(raw) ? raw : 'main';
+    } catch {}
+    await git.pull('origin', branchName, { '--rebase': 'true' });
+    await updateIndex();
+    return { success: true };
+  } catch (err) {
+    console.warn('Startup git pull failed:', err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('open-directory-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
