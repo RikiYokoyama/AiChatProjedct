@@ -60,6 +60,27 @@ export async function generateNoteTags(apiKey: string, userPrompt: string, aiRep
   }
 }
 
+export async function generateTagsFromContent(apiKey: string, noteContent: string): Promise<string[]> {
+  const prompt = `以下のノート本文を読み、内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発\n\n${noteContent.slice(0, 1500)}`;
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+      },
+    );
+    if (!response.ok) throw new Error('tag generation failed');
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    if (!text) return [];
+    return text.split(/[,，、]/).map((t: string) => t.trim().replace(/^#/, '')).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export class GeminiClient {
   constructor(private readonly apiKey: string) { }
 

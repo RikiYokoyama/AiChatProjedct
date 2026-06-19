@@ -30,6 +30,7 @@ import {
   GeminiClient,
   SYSTEM_PROMPTS,
   generateNoteTags,
+  generateTagsFromContent,
   generateNoteTitle,
 } from './lib/gemini';
 import { syncNotes } from './lib/githubSync';
@@ -343,7 +344,7 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const tags = await generateNoteTags(config.geminiApiKey, body.slice(0, 600), '');
+      const tags = await generateTagsFromContent(config.geminiApiKey, body);
       const current = targetNote?.tags ?? [];
       await updateTags(targetName, body, Array.from(new Set([...current, ...tags])));
       setAutoSaveStatus('saved');

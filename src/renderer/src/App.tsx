@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import GraphView from './GraphView';
-import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, SYSTEM_PROMPTS } from './lib/gemini';
+import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, generateTagsFromContent, SYSTEM_PROMPTS } from './lib/gemini';
 
 interface CustomPrompt {
   id: string;
@@ -988,7 +988,7 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const tags = await generateNoteTags(config.geminiApiKey, body.slice(0, 600), '');
+      const tags = await generateTagsFromContent(config.geminiApiKey, body);
       const current = selectedNote.tags || [];
       const nextTags = Array.from(new Set([...current, ...tags]));
       const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
