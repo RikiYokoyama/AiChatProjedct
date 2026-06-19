@@ -78,7 +78,7 @@ export class GitHubSync {
   }
 
   // Git Trees API を使ってリポジトリ内すべてのファイルを再帰的に取得
-  private async fetchRemoteList(): Promise<{ name: string; path: string; sha: string }[]> {
+  async fetchRemoteList(): Promise<{ name: string; path: string; sha: string }[]> {
     const res = await fetch(
       `${API}/repos/${this.repo}/git/trees/${encodeURIComponent(this.branch)}?recursive=1`,
       { headers: this.headers() }
@@ -99,7 +99,7 @@ export class GitHubSync {
       });
   }
 
-  private async fetchRemoteFile(remotePath: string): Promise<RemoteFile> {
+  async fetchRemoteFile(remotePath: string): Promise<RemoteFile> {
     const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
     const res = await fetch(
       `${API}/repos/${this.repo}/contents/${encodedPath}?ref=${encodeURIComponent(this.branch)}`,
@@ -111,7 +111,7 @@ export class GitHubSync {
     return { name, path: remotePath, sha: data.sha, content: decodeBase64Utf8(data.content) };
   }
 
-  private async deleteFile(remotePath: string, sha: string): Promise<void> {
+  async deleteFile(remotePath: string, sha: string): Promise<void> {
     const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
     const res = await fetch(`${API}/repos/${this.repo}/contents/${encodedPath}`, {
       method: 'DELETE',
@@ -128,7 +128,7 @@ export class GitHubSync {
     }
   }
 
-  private async putFile(remotePath: string, content: string, sha?: string): Promise<void> {
+  async putFile(remotePath: string, content: string, sha?: string): Promise<string | undefined> {
     const body: Record<string, unknown> = {
       message: `sync: update ${remotePath} from mobile`,
       content: encodeBase64Utf8(content),
@@ -142,9 +142,11 @@ export class GitHubSync {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`GitHub push error ${res.status} (repo: ${this.repo}, path: ${remotePath}): ${body}`);
+      const bodyText = await res.text();
+      throw new Error(`GitHub push error ${res.status} (repo: ${this.repo}, path: ${remotePath}): ${bodyText}`);
     }
+    const data = await res.json();
+    return data?.content?.sha as string | undefined;
   }
 
   async readMasterTags(): Promise<string[]> {
@@ -335,4 +337,79 @@ export async function writeMasterTagsToGitHub(gitRemoteUrl: string, tags: string
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return;
   return new GitHubSync(token, repo, branch).writeMasterTags(tags);
+}
+
+// ---------- GitHub 直接アクセス（Phase 5: モバイル thin client） ----------
+
+export interface RemoteNote {
+  name: string;        // ファイル名 (.md付き) 例: ファイル.md
+  remotePath: string;  // GitHub上のパス 例: notes/ファイル.md
+  sha: string;
+  updatedAt: string;
+}
+
+/** GitHub の _index.json からノートリストを取得（高速・1リクエスト） */
+export async function fetchNoteListFromGitHub(gitRemoteUrl: string): Promise<RemoteNote[]> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return [];
+  const sync = new GitHubSync(token, repo, branch);
+  // _index.json を優先（PC版 sync 後に生成される）
+  try {
+    const file = await sync.fetchRemoteFile('_index.json');
+    const index = JSON.parse(file.content) as Array<{
+      name: string; path: string; sha: string; updatedAt: string;
+    }>;
+    return index.map(e => ({
+      name: e.name.split('/').pop() ?? e.name,
+      remotePath: e.path ?? e.name,
+      sha: e.sha ?? '',
+      updatedAt: e.updatedAt ?? new Date().toISOString(),
+    }));
+  } catch {
+    // _index.json がない場合は Git Trees API にフォールバック
+    const list = await sync.fetchRemoteList();
+    return list
+      .filter(f => !f.name.startsWith('_'))
+      .map(f => ({
+        name: f.name.split('/').pop() ?? f.name,
+        remotePath: f.path,
+        sha: f.sha,
+        updatedAt: new Date().toISOString(),
+      }));
+  }
+}
+
+/** GitHub から1ファイルのコンテンツを取得 */
+export async function fetchNoteContentFromGitHub(
+  gitRemoteUrl: string,
+  remotePath: string,
+): Promise<{ content: string; sha: string }> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) throw new Error('GitHubの設定が不正です');
+  return new GitHubSync(token, repo, branch).fetchRemoteFile(remotePath);
+}
+
+/** GitHub にファイルを作成または更新する（sha は更新時に必須） */
+export async function saveNoteToGitHub(
+  gitRemoteUrl: string,
+  remotePath: string,
+  content: string,
+  sha?: string,
+): Promise<string> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) throw new Error('GitHubの設定が不正です');
+  const sync = new GitHubSync(token, repo, branch);
+  const newSha = await sync.putFile(remotePath, content, sha);
+  return newSha ?? '';
+}
+
+/** GitHub からファイルを削除する */
+export async function deleteNoteOnGitHub(
+  gitRemoteUrl: string,
+  remotePath: string,
+  sha: string,
+): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) throw new Error('GitHubの設定が不正です');
+  await new GitHubSync(token, repo, branch).deleteFile(remotePath, sha);
 }

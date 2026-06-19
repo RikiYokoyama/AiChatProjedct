@@ -1,11 +1,13 @@
 export interface Note {
   name: string; // ファイル名 (.md付き)
   updatedAt: string;
-  content: string;
+  content: string; // 空文字 = 未ロード（GitHub直接アクセス時）
   tags: string[];
   wikiLinks: string[];
   favorite?: boolean;
   archived?: boolean;
+  remotePath?: string; // GitHub上のパス (例: notes/ファイル.md)
+  sha?: string;        // GitHub blob SHA（更新・削除用）
 }
 
 export function cleanFilename(value: string) {

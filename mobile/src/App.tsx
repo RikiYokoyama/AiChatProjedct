@@ -35,7 +35,15 @@ import {
   generateTagsFromContent,
   generateNoteTitle,
 } from './lib/gemini';
-import { syncNotes, readMasterTagsFromGitHub, writeMasterTagsToGitHub } from './lib/githubSync';
+import {
+  syncNotes,
+  readMasterTagsFromGitHub,
+  writeMasterTagsToGitHub,
+  fetchNoteListFromGitHub,
+  fetchNoteContentFromGitHub,
+  saveNoteToGitHub,
+  deleteNoteOnGitHub,
+} from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
   'deep-think': '思考整理',
@@ -96,13 +104,29 @@ export default function App() {
       const meta = await loadNoteMeta();
       setFavorites(meta.favorites);
       setArchived(meta.archived);
-      const list = await listNotes();
-      setNotes(list);
       if (!cfg.geminiApiKey) setTab('settings');
-      // マスタータグをキャッシュから読み込み、GitHubから最新を取得
+
+      // マスタータグをキャッシュから読み込み
       const cachedTags = await loadMasterTags();
       setMasterTags(cachedTags);
+
       if (cfg.gitRemoteUrl) {
+        // GitHub 直接アクセス: _index.json からノートリストを取得
+        try {
+          const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
+          const remoteNotes = remoteList.map(r => buildNote(r.name, '', r.updatedAt) as Note & { remotePath: string; sha: string });
+          // remotePath と sha を付与
+          const withMeta: Note[] = remoteList.map(r => ({
+            ...buildNote(r.name, '', r.updatedAt),
+            remotePath: r.remotePath,
+            sha: r.sha,
+          }));
+          setNotes(withMeta);
+        } catch {
+          // GitHub 取得失敗時はローカルストレージにフォールバック
+          setNotes(await listNotes());
+        }
+        // マスタータグを GitHub からも取得
         readMasterTagsFromGitHub(cfg.gitRemoteUrl).then((remoteTags) => {
           if (remoteTags.length > 0) {
             const merged = Array.from(new Set([...cachedTags, ...remoteTags]));
@@ -110,15 +134,29 @@ export default function App() {
             saveMasterTagsLocal(merged);
           }
         }).catch(() => {});
-      }
-      if (cfg.autoSync && cfg.gitRemoteUrl) {
-        runSync(cfg);
+      } else {
+        // GitHub 未設定: ローカルストレージから読み込み
+        setNotes(await listNotes());
+        if (cfg.autoSync && cfg.gitRemoteUrl) runSync(cfg);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshNotes = useCallback(async () => {
+    const cfg = configRef.current;
+    if (cfg.gitRemoteUrl) {
+      try {
+        const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
+        const withMeta: Note[] = remoteList.map(r => ({
+          ...buildNote(r.name, '', r.updatedAt),
+          remotePath: r.remotePath,
+          sha: r.sha,
+        }));
+        setNotes(withMeta);
+        return;
+      } catch { /* fall through to local */ }
+    }
     setNotes(await listNotes());
   }, []);
 
@@ -141,20 +179,53 @@ export default function App() {
   useEffect(() => {
     if (!noteTabSelectedName) return;
     const timer = setTimeout(async () => {
-      await writeNote(noteTabSelectedName, noteTabContentRef.current);
-      setNotes((prev) =>
-        prev.map((n) =>
-          n.name === noteTabSelectedName ? buildNote(n.name, noteTabContentRef.current) : n,
-        ),
-      );
+      const cfg = configRef.current;
+      const content = noteTabContentRef.current;
+      if (cfg.gitRemoteUrl) {
+        // GitHub 直接書き込み
+        const note = notes.find(n => n.name === noteTabSelectedName);
+        const remotePath = note?.remotePath ?? `notes/${noteTabSelectedName}`;
+        try {
+          const newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, content, note?.sha);
+          setNotes(prev => prev.map(n =>
+            n.name === noteTabSelectedName
+              ? { ...buildNote(n.name, content), remotePath, sha: newSha || n.sha }
+              : n
+          ));
+        } catch (err) {
+          console.error('Auto-save to GitHub failed:', err);
+        }
+      } else {
+        await writeNote(noteTabSelectedName, content);
+        setNotes((prev) =>
+          prev.map((n) =>
+            n.name === noteTabSelectedName ? buildNote(n.name, content) : n,
+          ),
+        );
+      }
     }, 1200);
     return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteTabContent, noteTabSelectedName]);
 
-  // ノートタブでファイルを選択
-  const selectNoteForNoteTab = useCallback((note: Note) => {
+  // ノートタブでファイルを選択（GitHub 直接アクセス時はコンテンツをオンデマンド取得）
+  const selectNoteForNoteTab = useCallback(async (note: Note) => {
     setNoteTabSelectedName(note.name);
-    setNoteTabContent(note.content);
+    const cfg = configRef.current;
+    if (cfg.gitRemoteUrl && note.remotePath && note.content === '') {
+      // GitHub からコンテンツをフェッチ
+      try {
+        const { content, sha } = await fetchNoteContentFromGitHub(cfg.gitRemoteUrl, note.remotePath);
+        setNoteTabContent(content);
+        // sha を notes state に反映
+        setNotes(prev => prev.map(n => n.name === note.name ? { ...n, content, sha } : n));
+      } catch (err) {
+        alert('ノートの読み込みに失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+        setNoteTabContent('');
+      }
+    } else {
+      setNoteTabContent(note.content);
+    }
     setRecentNames((prev) => [note.name, ...prev.filter((n) => n !== note.name)].slice(0, 10));
   }, []);
 
@@ -174,11 +245,16 @@ export default function App() {
       name = cleanFilename(`${firstLine} (${counter++})`);
     }
     const initial = initialNoteContent(noteTitle(name));
-    await writeNote(name, initial);
+    const remotePath = `notes/${name}`;
+    if (config.gitRemoteUrl) {
+      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+    } else {
+      await writeNote(name, initial);
+    }
     await refreshNotes();
 
     // ノートタブで開く
-    const newNote = buildNote(name, initial);
+    const newNote = { ...buildNote(name, initial), remotePath };
     selectNoteForNoteTab(newNote);
     setTab('note');
     setChatHistory([]);
@@ -268,15 +344,24 @@ export default function App() {
     }
     const now = new Date().toLocaleString('ja-JP');
     const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
-    await writeNote(name, initial);
+    const remotePath = `memos/${name}`;
+    if (config.gitRemoteUrl) {
+      await saveNoteToGitHub(config.gitRemoteUrl, remotePath, initial);
+    } else {
+      await writeNote(name, initial);
+    }
     await refreshNotes();
-    selectNoteForNoteTab(buildNote(name, initial));
+    selectNoteForNoteTab({ ...buildNote(name, initial), remotePath });
     setTab('note');
   }
 
   async function deleteNoteAction(note: Note) {
     if (!window.confirm(`「${noteTitle(note.name)}」を削除しますか？`)) return;
-    await removeNote(note.name);
+    if (config.gitRemoteUrl && note.remotePath && note.sha) {
+      await deleteNoteOnGitHub(config.gitRemoteUrl, note.remotePath, note.sha);
+    } else {
+      await removeNote(note.name);
+    }
     if (noteTabSelectedName === note.name) {
       setNoteTabSelectedName(null);
       setNoteTabContent('');
@@ -339,8 +424,14 @@ export default function App() {
   async function updateTags(name: string, currentContent: string, nextTags: string[]) {
     const nextContent = applyTagsToContent(currentContent, nextTags);
     if (name === noteTabSelectedName) setNoteTabContent(nextContent);
-    await writeNote(name, nextContent);
-    await refreshNotes();
+    const note = notes.find(n => n.name === name);
+    if (config.gitRemoteUrl && note?.remotePath) {
+      const newSha = await saveNoteToGitHub(config.gitRemoteUrl, note.remotePath, nextContent, note.sha);
+      setNotes(prev => prev.map(n => n.name === name ? { ...buildNote(n.name, nextContent), remotePath: note.remotePath, sha: newSha || n.sha } : n));
+    } else {
+      await writeNote(name, nextContent);
+      await refreshNotes();
+    }
   }
 
   // ---------- クイックAIアクション (EditorScreen / NoteScreen 共通) ----------
@@ -384,8 +475,15 @@ export default function App() {
       while (notes.some((n) => n.name.toLowerCase() === newName.toLowerCase() && n.name !== targetName)) {
         newName = cleanFilename(`${newTitle} (${counter++})`);
       }
-      await writeNote(newName, body);
-      await removeNote(targetName);
+      const oldNote = notes.find(n => n.name === targetName);
+      if (config.gitRemoteUrl && oldNote?.remotePath) {
+        const newRemotePath = oldNote.remotePath.replace(/[^/]+$/, newName);
+        await saveNoteToGitHub(config.gitRemoteUrl, newRemotePath, body);
+        if (oldNote.sha) await deleteNoteOnGitHub(config.gitRemoteUrl, oldNote.remotePath, oldNote.sha);
+      } else {
+        await writeNote(newName, body);
+        await removeNote(targetName);
+      }
       setNoteTabSelectedName(newName);
       setRecentNames((prev) => [newName, ...prev.filter((n) => n !== targetName)]);
       await refreshNotes();
@@ -404,7 +502,12 @@ export default function App() {
       null,
       (chunk) => { acc += chunk; setTargetContent(acc); },
       async () => {
-        await writeNote(targetName, acc);
+        const note = notes.find(n => n.name === targetName);
+        if (config.gitRemoteUrl && note?.remotePath) {
+          await saveNoteToGitHub(config.gitRemoteUrl, note.remotePath, acc, note.sha);
+        } else {
+          await writeNote(targetName, acc);
+        }
         await refreshNotes();
         setIsGenerating(false);
       },
@@ -458,20 +561,29 @@ export default function App() {
       // 対象ファイルが開かれている場合はそこに追記
       const targetName = contextName;
       if (targetName) {
-        const base = targetName === noteTabSelectedName ? noteTabContentRef.current
-                   : notes.find((n) => n.name === targetName)?.content ?? '';
         const currentNote = notes.find((n) => n.name === targetName);
+        const base = targetName === noteTabSelectedName ? noteTabContentRef.current
+                   : currentNote?.content ?? '';
         const currentTags = currentNote?.tags ?? [];
         const nextTags = Array.from(new Set([...currentTags, ...extracted]));
         const appended = applyTagsToContent(`${base.trimEnd()}\n\n${block}\n`, nextTags);
         if (targetName === noteTabSelectedName) setNoteTabContent(appended);
-        await writeNote(targetName, appended);
+        if (config.gitRemoteUrl && currentNote?.remotePath) {
+          await saveNoteToGitHub(config.gitRemoteUrl, currentNote.remotePath, appended, currentNote.sha);
+        } else {
+          await writeNote(targetName, appended);
+        }
       } else {
         // ファイルを新規作成
         const title = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
         const filename = cleanFilename(title);
         const full = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${extracted.join(', ')}\n\n${block}\n`;
-        await writeNote(filename, full);
+        const remotePath = `notes/${filename}`;
+        if (config.gitRemoteUrl) {
+          await saveNoteToGitHub(config.gitRemoteUrl, remotePath, full);
+        } else {
+          await writeNote(filename, full);
+        }
         setNoteTabSelectedName(filename);
         setNoteTabContent(full);
         setRecentNames((prev) => [filename, ...prev.filter((n) => n !== filename)].slice(0, 10));
