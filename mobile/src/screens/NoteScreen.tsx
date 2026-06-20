@@ -1,10 +1,11 @@
 import { useRef, useMemo, useState } from 'react';
 import { BookOpen, Brackets, ChevronDown, ChevronRight, Check, Edit3, Eye, FileText, FolderClosed, FolderOpen, List, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
 
-function buildMobileFileTree(notes: { name: string }[]): Record<string, { name: string }[]> {
-  const tree: Record<string, { name: string }[]> = {};
+function buildMobileFileTree(notes: { name: string; remotePath?: string }[]): Record<string, { name: string; remotePath?: string }[]> {
+  const tree: Record<string, { name: string; remotePath?: string }[]> = {};
   notes.forEach((note) => {
-    const parts = note.name.split('/');
+    const fullPath = note.remotePath || note.name;
+    const parts = fullPath.split('/');
     const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
     if (!tree[dir]) tree[dir] = [];
     tree[dir].push(note);
