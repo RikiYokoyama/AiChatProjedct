@@ -19,6 +19,7 @@ interface GraphViewProps {
   onClose: () => void;
   isLocal?: boolean;
   centerNoteName?: string;
+  onCreateNote?: (name: string) => void;
 }
 
 interface GroupRule {
@@ -33,7 +34,7 @@ const defaultSettings = {
   showTags: true,
   showAttachments: true,
   existingOnly: false,
-  showOrphans: true,
+  showOrphans: false,
   excludePattern: '',
 
   // 表示
@@ -93,10 +94,13 @@ function parseFrontmatterTags(content: string): string[] {
   return tags;
 }
 
-export default function GraphView({ notes, onSelectNote, onClose, isLocal = false, centerNoteName }: GraphViewProps) {
+export default function GraphView({ notes, onSelectNote, onClose, isLocal = false, centerNoteName, onCreateNote }: GraphViewProps) {
   const containerRef2D = useRef<HTMLDivElement>(null);
   const containerRef3D = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+
+  // 存在しないノード作成確認ダイアログ
+  const [createConfirm, setCreateConfirm] = useState<string | null>(null);
 
   const sigmaRef = useRef<Sigma | null>(null);
   const lineMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
@@ -455,10 +459,14 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     });
     sigmaRef.current = sigma;
 
-    // ダブルクリックでファイルを開く
+    // ダブルクリックでファイルを開く（存在しない場合は作成確認）
     sigma.on('doubleClickNode', ({ node }) => {
       const found = notes.find((note) => noteId(note) === node);
-      if (found) onSelectNote(found);
+      if (found) {
+        onSelectNote(found);
+      } else if (onCreateNote) {
+        setCreateConfirm(node);
+      }
     });
 
     // 軽量バネ力シミュレーション（モバイルと同仕様）
@@ -888,7 +896,11 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         if (instanceId !== undefined) {
           const clickedNode = targetNodes[instanceId];
           const found = notes.find((n) => noteId(n) === clickedNode);
-          if (found) onSelectNote(found);
+          if (found) {
+            onSelectNote(found);
+          } else if (onCreateNote) {
+            setCreateConfirm(clickedNode);
+          }
         }
       }
     };
@@ -1669,6 +1681,35 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           </button>
         </div>
       </div>
+
+      {/* 存在しないノート作成確認ダイアログ */}
+      {createConfirm !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="w-full max-w-sm rounded-lg border border-white/10 bg-[#0b1020] p-6 shadow-2xl">
+            <h2 className="mb-2 text-sm font-semibold text-gray-200">ノートを作成しますか？</h2>
+            <p className="mb-5 text-xs text-gray-400">
+              <span className="font-medium text-indigo-300">「{createConfirm}」</span> はまだ存在しません。新規作成しますか？
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setCreateConfirm(null)}
+                className="rounded px-4 py-1.5 text-xs text-gray-400 hover:bg-white/10 hover:text-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  onCreateNote?.(createConfirm);
+                  setCreateConfirm(null);
+                }}
+                className="rounded bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 transition-colors"
+              >
+                作成する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -3,9 +3,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Check,
+  ChevronRight,
   Edit3,
   Eye,
   FileText,
+  FolderOpen,
+  FolderClosed,
   GitBranch,
   Loader2,
   Network,
@@ -69,7 +72,27 @@ const emptyConfig: AppConfig = {
   customPrompts: [],
 };
 
-type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph' | 'search';
+type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph' | 'search' | 'outline' | 'filetree';
+
+// 見出しパース
+function parseOutline(content: string): { level: number; text: string; line: number }[] {
+  return content.split('\n').flatMap((line, i) => {
+    const m = line.match(/^(#{1,6})\s+(.+)/);
+    return m ? [{ level: m[1].length, text: m[2].trim(), line: i }] : [];
+  });
+}
+
+// ファイルツリー構築
+function buildFileTree(notes: Note[]): Record<string, Note[]> {
+  const tree: Record<string, Note[]> = {};
+  notes.forEach((note) => {
+    const parts = (note.path || note.name).split('/');
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+    if (!tree[dir]) tree[dir] = [];
+    tree[dir].push(note);
+  });
+  return tree;
+}
 
 function cleanFilename(value: string) {
   const name = value.trim().replace(/[\\/:*?"<>|]/g, '-');
@@ -215,9 +238,11 @@ export default function App() {
   const [newPromptText, setNewPromptText] = useState('');
   const [expandedTags, setExpandedTags] = useState<string[]>([]);
   const [expandedLinks, setExpandedLinks] = useState<string[]>([]);
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const previewDivRef = useRef<HTMLDivElement>(null);
 
   const wrapSelectionWithWikiLink = useCallback(() => {
     const textarea = editorRef.current;
@@ -588,6 +613,51 @@ export default function App() {
         const newIndex = prev.findIndex((t) => t.name === over.id);
         return arrayMove(prev, oldIndex, newIndex);
       });
+    }
+  }
+
+  async function createNoteByName(rawName: string) {
+    let name = cleanFilename(rawName);
+    const baseTitle = name.replace(/\.md$/i, '');
+    let counter = 1;
+    while (notes.some((n) => n.name.toLowerCase() === name.toLowerCase())) {
+      name = cleanFilename(`${baseTitle} (${counter})`);
+      counter++;
+    }
+    const title = name.replace(/\.md$/i, '');
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
+    const result = await window.electronAPI.saveNote({ filename: name, content: initial });
+    if (!result.success) {
+      alert(result.error ?? 'ノートを作成できませんでした');
+      return;
+    }
+    await loadNotesList();
+    const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
+    await openNote(note);
+    setRibbonView('notes');
+    setEditMode('edit');
+  }
+
+  function scrollToHeading(text: string, level: number, line: number) {
+    if (editMode === 'edit') {
+      const ta = editorRef.current;
+      if (!ta) return;
+      const lineHeight = 28;
+      ta.scrollTop = line * lineHeight - ta.clientHeight / 3;
+      ta.focus();
+    } else {
+      const div = previewDivRef.current;
+      if (!div) return;
+      const tag = `h${level}`;
+      const headings = div.querySelectorAll(tag);
+      for (const h of headings) {
+        if (h.textContent?.trim() === text) {
+          h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          break;
+        }
+      }
     }
   }
 
@@ -1234,6 +1304,8 @@ export default function App() {
             <RibbonButton icon={<FileText className="h-4 w-4" />} active={ribbonView === 'notes'} title="ノート" onClick={() => setRibbonView('notes')} />
             <RibbonButton icon={<Network className="h-4 w-4" />} active={ribbonView === 'graph'} title="グラフ" onClick={() => setRibbonView('graph')} />
             <RibbonButton icon={<Search className="h-4 w-4" />} active={ribbonView === 'search'} title="検索/一覧" onClick={() => setRibbonView('search')} />
+            <RibbonButton icon={<ListTree className="h-4 w-4" />} active={ribbonView === 'outline'} title="アウトライン" onClick={() => setRibbonView('outline')} />
+            <RibbonButton icon={<FolderOpen className="h-4 w-4" />} active={ribbonView === 'filetree'} title="ファイルツリー" onClick={() => setRibbonView('filetree')} />
           </div>
           <div className="flex flex-col items-center gap-1">
             <button
@@ -1254,6 +1326,7 @@ export default function App() {
               notes={notes}
               onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
               onClose={() => setRibbonView('notes')}
+              onCreateNote={(name) => createNoteByName(name)}
             />
           </div>
         )}
@@ -1267,6 +1340,7 @@ export default function App() {
               onClose={() => setRibbonView('notes')}
               isLocal={true}
               centerNoteName={localGraphTarget}
+              onCreateNote={(name) => createNoteByName(name)}
             />
           </div>
         )}
@@ -1422,6 +1496,107 @@ export default function App() {
                     })()}
                   </div>
                 </div>
+              </div>
+            </div>
+          ) : ribbonView === 'outline' ? (
+            /* ── アウトラインパネル ── */
+            <div className="flex flex-1 flex-col min-h-0">
+              <div className="p-3 border-b border-white/10">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">アウトライン</h2>
+                {selectedNote && (
+                  <p className="mt-1 truncate text-[10px] text-indigo-300">{selectedNote.name}</p>
+                )}
+              </div>
+              <div className="flex-1 overflow-y-auto p-2 min-h-0">
+                {!selectedNote ? (
+                  <p className="px-2 py-4 text-xs text-gray-500 text-center">ファイルを開いてください</p>
+                ) : (() => {
+                  const headings = parseOutline(content);
+                  if (headings.length === 0) return (
+                    <p className="px-2 py-4 text-xs text-gray-500 text-center">見出しがありません</p>
+                  );
+                  const minLevel = Math.min(...headings.map(h => h.level));
+                  return (
+                    <div className="space-y-0.5">
+                      {headings.map((h, i) => (
+                        <button
+                          key={i}
+                          onClick={() => scrollToHeading(h.text, h.level, h.line)}
+                          className="flex w-full items-start gap-1.5 rounded px-2 py-1 text-left text-xs text-gray-300 hover:bg-white/5 hover:text-indigo-300 transition-colors"
+                          style={{ paddingLeft: `${(h.level - minLevel) * 12 + 8}px` }}
+                        >
+                          <span className="shrink-0 mt-0.5 text-[9px] text-gray-600 font-mono">H{h.level}</span>
+                          <span className="truncate">{h.text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          ) : ribbonView === 'filetree' ? (
+            /* ── ファイルツリーパネル ── */
+            <div className="flex flex-1 flex-col min-h-0">
+              <div className="p-3 border-b border-white/10">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">ファイルツリー</h2>
+                <p className="mt-0.5 text-[10px] text-gray-500">{notes.length} ファイル</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-2 min-h-0">
+                {(() => {
+                  const tree = buildFileTree(notes);
+                  const dirs = Object.keys(tree).sort();
+                  return dirs.map((dir) => {
+                    const dirNotes = tree[dir].slice().sort((a, b) => a.name.localeCompare(b.name));
+                    const isCollapsed = collapsedDirs.has(dir);
+                    if (dir === '') {
+                      return (
+                        <div key="root" className="space-y-0.5 mb-1">
+                          {dirNotes.map((note) => (
+                            <button
+                              key={note.name}
+                              onClick={() => openNote(note)}
+                              className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors hover:bg-white/5 ${selectedNote?.name === note.name ? 'text-indigo-300 font-medium bg-indigo-500/10' : 'text-gray-400'}`}
+                            >
+                              <FileText className="h-3 w-3 shrink-0 text-gray-500" />
+                              <span className="truncate">{note.name.replace(/\.md$/i, '')}</span>
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={dir} className="mb-1">
+                        <button
+                          onClick={() => setCollapsedDirs(prev => {
+                            const next = new Set(prev);
+                            next.has(dir) ? next.delete(dir) : next.add(dir);
+                            return next;
+                          })}
+                          className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs text-gray-300 hover:bg-white/5 transition-colors"
+                        >
+                          <ChevronRight className={`h-3 w-3 shrink-0 text-gray-500 transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
+                          {isCollapsed ? <FolderClosed className="h-3 w-3 shrink-0 text-yellow-500/70" /> : <FolderOpen className="h-3 w-3 shrink-0 text-yellow-400/80" />}
+                          <span className="truncate font-medium">{dir.split('/').pop()}</span>
+                          <span className="ml-auto text-[10px] text-gray-600">{dirNotes.length}</span>
+                        </button>
+                        {!isCollapsed && (
+                          <div className="ml-4 border-l border-white/5 pl-1 space-y-0.5">
+                            {dirNotes.map((note) => (
+                              <button
+                                key={note.name}
+                                onClick={() => openNote(note)}
+                                className={`flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left text-xs transition-colors hover:bg-white/5 ${selectedNote?.name === note.name ? 'text-indigo-300 font-medium bg-indigo-500/10' : 'text-gray-400'}`}
+                              >
+                                <FileText className="h-3 w-3 shrink-0 text-gray-500" />
+                                <span className="truncate">{note.name.split('/').pop()?.replace(/\.md$/i, '')}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           ) : (
@@ -1699,6 +1874,7 @@ export default function App() {
                 />
               ) : (
                 <div
+                  ref={previewDivRef}
                   className="markdown-preview h-full overflow-y-auto p-6"
                   onContextMenu={handlePreviewContextMenu}
                 >

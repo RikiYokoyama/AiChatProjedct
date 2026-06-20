@@ -1,5 +1,12 @@
 import { useRef, useMemo, useState } from 'react';
 import { BookOpen, Brackets, ChevronDown, Check, Edit3, Eye, FileText, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
+
+function parseOutlineMobile(content: string) {
+  return content.split('\n').flatMap((line, i) => {
+    const m = line.match(/^(#{1,6})\s+(.+)/);
+    return m ? [{ level: m[1].length, text: m[2].trim(), line: i }] : [];
+  });
+}
 import { Note, noteTitle } from '../lib/notes';
 import MarkdownView from '../components/MarkdownView';
 import { useKeyboardInset } from '../hooks/useKeyboardInset';
@@ -51,6 +58,8 @@ export default function NoteScreen({
 
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
   const [showFilePicker, setShowFilePicker] = useState(false);
+  const [showOutline, setShowOutline] = useState(false);
+  const previewRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [showModePicker, setShowModePicker] = useState(false);
@@ -194,7 +203,7 @@ export default function NoteScreen({
               placeholder="ここに直接書き込めます..."
             />
           ) : (
-            <div className="h-full overflow-y-auto px-4 py-3">
+            <div ref={previewRef} className="h-full overflow-y-auto px-4 py-3">
               <MarkdownView text={content} onWikiLinkClick={onWikiLinkClick} existingNames={existingNames} />
             </div>
           )
@@ -246,6 +255,12 @@ export default function NoteScreen({
           <div className="h-5 w-px shrink-0 bg-white/10" />
           <ToolbarButton icon={<Tag className="h-4 w-4" />} label="タグ生成" onClick={() => onAiAction('tags')} />
           <ToolbarButton icon={<ListTree className="h-4 w-4" />} label="要約" onClick={() => onAiAction('summary')} />
+          {selectedNote && (
+            <>
+              <div className="h-5 w-px shrink-0 bg-white/10" />
+              <ToolbarButton icon={<ListTree className="h-4 w-4 text-indigo-400" />} label="アウトライン" onClick={() => setShowOutline(true)} />
+            </>
+          )}
           {editMode === 'edit' && (
             <>
               <div className="h-5 w-px shrink-0 bg-white/10" />
@@ -337,6 +352,63 @@ export default function NoteScreen({
           </button>
         </div>
       </div>
+
+      {/* ── アウトライン ボトムシート ── */}
+      {showOutline && selectedNote && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" onClick={() => setShowOutline(false)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 flex max-h-[60vh] flex-col rounded-t-2xl border-t border-white/10 bg-[#0d1225]">
+            <div className="flex shrink-0 flex-col items-center px-4 pb-2 pt-3">
+              <div className="mb-3 h-1 w-10 rounded-full bg-white/20" />
+              <div className="flex w-full items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-bold text-white">アウトライン</h2>
+                  <p className="text-[10px] text-indigo-300 truncate max-w-[200px]">{selectedNote.name}</p>
+                </div>
+                <button onClick={() => setShowOutline(false)} className="rounded-full p-1.5 text-gray-400 active:bg-white/10">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 pb-4">
+              {(() => {
+                const headings = parseOutlineMobile(content);
+                if (headings.length === 0) return (
+                  <p className="py-6 text-center text-sm text-gray-500">見出しがありません</p>
+                );
+                const minLevel = Math.min(...headings.map(h => h.level));
+                return (
+                  <div className="space-y-0.5">
+                    {headings.map((h, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          setShowOutline(false);
+                          if (editMode === 'preview' && previewRef.current) {
+                            const tag = `h${h.level}`;
+                            const els = previewRef.current.querySelectorAll(tag);
+                            for (const el of els) {
+                              if (el.textContent?.trim() === h.text) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                break;
+                              }
+                            }
+                          }
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
+                        style={{ paddingLeft: `${(h.level - minLevel) * 14 + 12}px` }}
+                      >
+                        <span className="shrink-0 text-[9px] font-mono text-gray-600">H{h.level}</span>
+                        <span className="text-sm text-gray-200 truncate">{h.text}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── ファイルピッカー ボトムシート ── */}
       {showFilePicker && (
