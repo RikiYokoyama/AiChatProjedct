@@ -1,5 +1,16 @@
 import { useRef, useMemo, useState } from 'react';
-import { BookOpen, Brackets, ChevronDown, Check, Edit3, Eye, FileText, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
+import { BookOpen, Brackets, ChevronDown, ChevronRight, Check, Edit3, Eye, FileText, FolderClosed, FolderOpen, List, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
+
+function buildMobileFileTree(notes: { name: string }[]): Record<string, { name: string }[]> {
+  const tree: Record<string, { name: string }[]> = {};
+  notes.forEach((note) => {
+    const parts = note.name.split('/');
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+    if (!tree[dir]) tree[dir] = [];
+    tree[dir].push(note);
+  });
+  return tree;
+}
 
 function parseOutlineMobile(content: string) {
   return content.split('\n').flatMap((line, i) => {
@@ -59,6 +70,8 @@ export default function NoteScreen({
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showOutline, setShowOutline] = useState(false);
+  const [pickerView, setPickerView] = useState<'list' | 'tree'>('list');
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
   const previewRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [chatInput, setChatInput] = useState('');
@@ -420,62 +433,157 @@ export default function NoteScreen({
           />
 
           {/* シート本体 */}
-          <div className="fixed bottom-0 left-0 right-0 z-50 flex max-h-[65vh] flex-col rounded-t-2xl border-t border-white/10 bg-[#0d1225]">
+          <div className="fixed bottom-0 left-0 right-0 z-50 flex max-h-[70vh] flex-col rounded-t-2xl border-t border-white/10 bg-[#0d1225]">
             {/* ハンドル */}
             <div className="flex shrink-0 flex-col items-center px-4 pb-2 pt-3">
               <div className="mb-3 h-1 w-10 rounded-full bg-white/20" />
               <div className="flex w-full items-center justify-between">
                 <h2 className="text-sm font-bold text-white">ファイルを選択</h2>
-                <button onClick={closePicker} className="rounded-full p-1.5 text-gray-400 active:bg-white/10">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* 検索欄 */}
-            <div className="shrink-0 px-4 pb-2">
-              <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
-                <Search className="h-4 w-4 shrink-0 text-gray-500" />
-                <input
-                  autoFocus
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="ファイルを検索..."
-                  className="w-full bg-transparent text-sm text-white outline-none placeholder:text-gray-500"
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')}>
-                    <X className="h-4 w-4 text-gray-500" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* ファイルリスト */}
-            <div className="min-h-0 flex-1 overflow-y-auto pb-6">
-              {filteredNotes.length === 0 ? (
-                <p className="py-8 text-center text-sm text-gray-500">
-                  {searchQuery ? '該当するファイルがありません' : 'ファイルがありません'}
-                </p>
-              ) : (
-                filteredNotes.map((note) => {
-                  const isSelected = selectedNote?.name === note.name;
-                  return (
+                <div className="flex items-center gap-2">
+                  {/* リスト/ツリー切り替え */}
+                  <div className="flex items-center rounded-lg bg-white/5 p-0.5">
                     <button
-                      key={note.name}
-                      onClick={() => selectNote(note)}
-                      className={`flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/10 ${
-                        isSelected ? 'bg-indigo-500/10' : ''
-                      }`}
+                      onClick={() => setPickerView('list')}
+                      className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${pickerView === 'list' ? 'bg-indigo-600 text-white' : 'text-gray-400 active:bg-white/10'}`}
                     >
-                      <FileText className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-gray-500'}`} />
-                      <span className={`flex-1 truncate text-sm ${isSelected ? 'font-semibold text-indigo-300' : 'text-gray-200'}`}>
-                        {noteTitle(note.name)}
-                      </span>
-                      {isSelected && <Check className="h-4 w-4 shrink-0 text-indigo-400" />}
+                      <List className="h-3 w-3" />
+                      リスト
                     </button>
+                    <button
+                      onClick={() => setPickerView('tree')}
+                      className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${pickerView === 'tree' ? 'bg-indigo-600 text-white' : 'text-gray-400 active:bg-white/10'}`}
+                    >
+                      <FolderOpen className="h-3 w-3" />
+                      ツリー
+                    </button>
+                  </div>
+                  <button onClick={closePicker} className="rounded-full p-1.5 text-gray-400 active:bg-white/10">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 検索欄（リストモード時のみ） */}
+            {pickerView === 'list' && (
+              <div className="shrink-0 px-4 pb-2">
+                <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+                  <Search className="h-4 w-4 shrink-0 text-gray-500" />
+                  <input
+                    autoFocus
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="ファイルを検索..."
+                    className="w-full bg-transparent text-sm text-white outline-none placeholder:text-gray-500"
+                  />
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')}>
+                      <X className="h-4 w-4 text-gray-500" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ファイルリスト / ツリー */}
+            <div className="min-h-0 flex-1 overflow-y-auto pb-6">
+              {pickerView === 'list' ? (
+                filteredNotes.length === 0 ? (
+                  <p className="py-8 text-center text-sm text-gray-500">
+                    {searchQuery ? '該当するファイルがありません' : 'ファイルがありません'}
+                  </p>
+                ) : (
+                  filteredNotes.map((note) => {
+                    const isSelected = selectedNote?.name === note.name;
+                    return (
+                      <button
+                        key={note.name}
+                        onClick={() => selectNote(note)}
+                        className={`flex w-full items-center gap-3 px-4 py-3 text-left active:bg-white/10 ${isSelected ? 'bg-indigo-500/10' : ''}`}
+                      >
+                        <FileText className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-gray-500'}`} />
+                        <span className={`flex-1 truncate text-sm ${isSelected ? 'font-semibold text-indigo-300' : 'text-gray-200'}`}>
+                          {noteTitle(note.name)}
+                        </span>
+                        {isSelected && <Check className="h-4 w-4 shrink-0 text-indigo-400" />}
+                      </button>
+                    );
+                  })
+                )
+              ) : (
+                /* ツリービュー */
+                (() => {
+                  const tree = buildMobileFileTree(notes);
+                  const dirs = Object.keys(tree).sort();
+                  return (
+                    <div className="px-2 pt-1">
+                      {dirs.map((dir) => {
+                        const dirNotes = tree[dir].slice().sort((a, b) => a.name.localeCompare(b.name));
+                        const isCollapsed = collapsedDirs.has(dir);
+                        if (dir === '') {
+                          return dirNotes.map((note) => {
+                            const isSelected = selectedNote?.name === note.name;
+                            return (
+                              <button
+                                key={note.name}
+                                onClick={() => selectNote(note as any)}
+                                className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left active:bg-white/10 ${isSelected ? 'bg-indigo-500/10' : ''}`}
+                              >
+                                <FileText className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-gray-500'}`} />
+                                <span className={`flex-1 truncate text-sm ${isSelected ? 'font-semibold text-indigo-300' : 'text-gray-200'}`}>
+                                  {note.name.replace(/\.md$/i, '')}
+                                </span>
+                                {isSelected && <Check className="h-4 w-4 shrink-0 text-indigo-400" />}
+                              </button>
+                            );
+                          });
+                        }
+                        return (
+                          <div key={dir} className="mb-1">
+                            <button
+                              onClick={() => setCollapsedDirs(prev => {
+                                const next = new Set(prev);
+                                next.has(dir) ? next.delete(dir) : next.add(dir);
+                                return next;
+                              })}
+                              className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
+                            >
+                              <ChevronRight className={`h-4 w-4 shrink-0 text-gray-500 transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
+                              {isCollapsed
+                                ? <FolderClosed className="h-4 w-4 shrink-0 text-yellow-500/70" />
+                                : <FolderOpen className="h-4 w-4 shrink-0 text-yellow-400/80" />
+                              }
+                              <span className="flex-1 truncate text-sm font-medium text-gray-300">
+                                {dir.split('/').pop()}
+                              </span>
+                              <span className="text-xs text-gray-600">{dirNotes.length}</span>
+                            </button>
+                            {!isCollapsed && (
+                              <div className="ml-6 border-l border-white/5 pl-2">
+                                {dirNotes.map((note) => {
+                                  const isSelected = selectedNote?.name === note.name;
+                                  return (
+                                    <button
+                                      key={note.name}
+                                      onClick={() => selectNote(note as any)}
+                                      className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left active:bg-white/10 ${isSelected ? 'bg-indigo-500/10' : ''}`}
+                                    >
+                                      <FileText className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-gray-500'}`} />
+                                      <span className={`flex-1 truncate text-sm ${isSelected ? 'font-semibold text-indigo-300' : 'text-gray-200'}`}>
+                                        {note.name.split('/').pop()?.replace(/\.md$/i, '')}
+                                      </span>
+                                      {isSelected && <Check className="h-4 w-4 shrink-0 text-indigo-400" />}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   );
-                })
+                })()
               )}
             </div>
           </div>

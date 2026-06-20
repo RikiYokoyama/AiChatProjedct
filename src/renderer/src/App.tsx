@@ -86,7 +86,7 @@ function parseOutline(content: string): { level: number; text: string; line: num
 function buildFileTree(notes: Note[]): Record<string, Note[]> {
   const tree: Record<string, Note[]> = {};
   notes.forEach((note) => {
-    const parts = (note.path || note.name).split('/');
+    const parts = note.name.split('/');
     const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
     if (!tree[dir]) tree[dir] = [];
     tree[dir].push(note);
