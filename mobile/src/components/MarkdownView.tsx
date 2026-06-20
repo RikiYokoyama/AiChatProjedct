@@ -6,10 +6,18 @@ import { preprocessWikiLinks } from '../lib/notes';
 export default function MarkdownView({
   text,
   onWikiLinkClick,
+  existingNames,
 }: {
   text: string;
   onWikiLinkClick?: (noteName: string) => void;
+  existingNames?: Set<string>;
 }) {
+  function noteExists(noteName: string): boolean {
+    if (!existingNames) return true; // 未指定時は存在扱い（スタイル変化なし）
+    const lower = noteName.toLowerCase();
+    return existingNames.has(lower) || existingNames.has(lower + '.md');
+  }
+
   return (
     <div className="markdown-preview">
       <ReactMarkdown
@@ -18,9 +26,14 @@ export default function MarkdownView({
           a: ({ href, children }) => {
             if (href && href.startsWith('#wiki-')) {
               const noteName = decodeURIComponent(href.replace('#wiki-', ''));
+              const exists = noteExists(noteName);
               return (
                 <span
-                  className="cursor-pointer font-semibold text-indigo-400 active:text-indigo-300"
+                  className={
+                    exists
+                      ? 'cursor-pointer font-semibold text-indigo-400 active:text-indigo-300'
+                      : 'cursor-pointer text-gray-500 underline decoration-dashed underline-offset-2 active:text-gray-400'
+                  }
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();

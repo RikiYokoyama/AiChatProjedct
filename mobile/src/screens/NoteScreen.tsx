@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useMemo, useState } from 'react';
 import { BookOpen, Brackets, ChevronDown, Check, Edit3, Eye, FileText, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
 import { Note, noteTitle } from '../lib/notes';
 import MarkdownView from '../components/MarkdownView';
@@ -44,6 +44,11 @@ export default function NoteScreen({
   onAddTag: (tag: string) => void;
   onRemoveTag: (tag: string) => void;
 }) {
+  const existingNames = useMemo(
+    () => new Set(notes.map(n => n.name.toLowerCase())),
+    [notes],
+  );
+
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -186,7 +191,7 @@ export default function NoteScreen({
             />
           ) : (
             <div className="h-full overflow-y-auto px-4 py-3">
-              <MarkdownView text={content} onWikiLinkClick={onWikiLinkClick} />
+              <MarkdownView text={content} onWikiLinkClick={onWikiLinkClick} existingNames={existingNames} />
             </div>
           )
         ) : (
