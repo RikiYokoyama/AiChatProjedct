@@ -1116,6 +1116,7 @@ export default function App() {
         setIsGenerating(false);
         alert(error instanceof Error ? error.message : String(error));
       },
+      chatMode === 'long-doc' ? { contextLimit: 100000 } : undefined,
     );
   }
 
@@ -1843,6 +1844,7 @@ export default function App() {
                   <option value="markdown-struct">ノート作成</option>
                   <option value="long-explain">長文詳細説明</option>
                   <option value="prompt-gen">プロンプト作成</option>
+                  <option value="long-doc">長文解析</option>
                   {(config.customPrompts || []).map((cp) => (
                     <option key={cp.id} value={cp.id}>
                       {cp.name}
@@ -2115,6 +2117,7 @@ export default function App() {
                     <option value="markdown-struct">ノート作成</option>
                     <option value="long-explain">長文詳細説明</option>
                     <option value="prompt-gen">プロンプト作成</option>
+                    <option value="long-doc">長文解析</option>
                     {(config.customPrompts || []).map((cp) => (
                       <option key={cp.id} value={cp.id}>
                         {cp.name}

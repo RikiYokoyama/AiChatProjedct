@@ -55,6 +55,7 @@ const CHAT_MODE_LABELS: Record<ChatMode, string> = {
   'markdown-struct': 'ノート作成',
   'long-explain': '長文詳細解説',
   'prompt-gen': 'プロンプト作成',
+  'long-doc': '長文解析',
 };
 
 export default function App() {
@@ -817,6 +818,7 @@ export default function App() {
         setIsGenerating(false);
         alert(err instanceof Error ? err.message : String(err));
       },
+      chatMode === 'long-doc' ? { contextLimit: 100000 } : undefined,
     );
   }
 

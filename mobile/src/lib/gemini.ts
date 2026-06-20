@@ -3,7 +3,7 @@ export interface ChatMessage {
   content: string;
 }
 
-export type ChatMode = 'deep-think' | 'markdown-struct' | 'long-explain' | 'prompt-gen';
+export type ChatMode = 'deep-think' | 'markdown-struct' | 'long-explain' | 'prompt-gen' | 'long-doc';
 export type AiModelMode = 'flash-lite' | 'flash' | 'pro';
 
 const MODEL_CANDIDATES: Record<AiModelMode, string[]> = {
@@ -17,6 +17,7 @@ export const SYSTEM_PROMPTS: Record<ChatMode, string> = {
   'markdown-struct': 'バラバラのメモを綺麗に構造化し、そのままObsidianに貼り付けられる美しいMarkdown（見出し・箇条書き・要約・末尾に `tags: [タグ名]`）で出力してください。また、出力する文章全体の長さは、Markdown記号等も含めて200文字〜500文字程度に収まるように要約して構成してください。回答の作成にあたっては、【内部リンク生成ルール】（重要な概念、プロジェクト名、特定のツール名、日付、または重要なキーワードは半角の二重ブラケットで囲み、Obsidianの内部リンク形式 `[[キーワード]]` や `[[実際のノート名|表示名]]` で積極的に出力する。未作成ノートでも構わないが、過剰な繰り返しや日常単語へのリンクは避ける）を厳格に適用してください。',
   'long-explain': '提示されたテーマについて、前提知識がない読者でも深く理解できるよう、網羅的で詳細な解説記事（目安：1000文字〜5000文字程度）を作成してください。単に要約するのではなく、背景、仕組み、具体例、メリット・デメリット、今後の展望まで詳細に執筆してください。箇条書きだけで終わらせず、各項目ごとに複数の段落を用いて丁寧な解説文（地の文）を記述してください。また、提供する情報はできる限り最新かつ正確な事実に基づいているか（ファクトチェック）を自ら厳格に検証した上で、信頼性の高い根拠を基に記述してください。回答の作成にあたっては、【内部リンク生成ルール】（重要な概念、プロジェクト名、特定のツール名、日付、または重要なキーワードは半角 of 二重ブラケットで囲み、Obsidianの内部リンク形式 `[[キーワード]]` や `[[実際のノート名|表示名]]` で積極的に出力する。未作成ノートでも構わないが、過剰な繰り返しや日常単語へのリンクは避ける）を厳格に適用してください。',
   'prompt-gen': 'ユーザーの要望に合わせて、AIチャット用のカスタムプロンプト（指示内容）を作成してください。出力の最後（または返答内）に、必ず以下の [PROMPT] フォーマットのブロックを含めて出力してください。ブロック外の説明は簡潔にし、最後に必ず「このプロンプトを追加しますか？」と1行で質問してください。\n\n【重要】名前フィールドは必ず10文字以内の短い日本語にしてください（例: 翻訳補助、議事録、要件定義）。\n\n[PROMPT]\n名前: 10文字以内の短い表示名\n指示: AIに対する具体的なシステムプロンプト指示テキスト全体\n[/PROMPT]\n\nこのプロンプトを追加しますか？',
+  'long-doc': 'あなたは長文ドキュメント解析の専門家です。ノートコンテキストとして渡された文書全体（または会話に貼り付けられたテキスト）を精読し、ユーザーの指示に答えてください。\n\n【対応できる作業】\n- 要約・要点抽出（「要約して」「ポイントをまとめて」）\n- 質疑応答（「〇〇について教えて」）\n- 構造分析（「章ごとにまとめて」「目次を作って」）\n- 比較・評価（「メリット・デメリットを整理して」）\n- アクションアイテム抽出（「次にやることを箇条書きで」）\n\n【回答ルール】\n- 文書の具体的な箇所を引用して根拠を示す\n- ユーザーの指示に応じて出力の長さを調整する（要約なら簡潔に、詳細解説なら詳しく）\n- 重要な概念は [[キーワード]] 形式（Obsidian内部リンク）で出力する\n- 文書に記載のない事項は推測せず「文書中に記載なし」と明示する',
 };
 
 export async function generateNoteTitle(apiKey: string, userPrompt: string, aiReply: string): Promise<string> {
@@ -119,6 +120,7 @@ export class GeminiClient {
     onChunk: (text: string) => void,
     onComplete: (fullText: string) => void,
     onError: (err: unknown) => void,
+    options?: { contextLimit?: number },
   ) {
     if (!this.apiKey) {
       onError(new Error('Gemini APIキーが設定されていません。設定画面でAPIキーを入力してください。'));
@@ -130,8 +132,9 @@ export class GeminiClient {
       parts: [{ text: message.content }],
     }));
 
+    const contextLimit = options?.contextLimit ?? 12000;
     const systemText = noteContext
-      ? `${systemInstruction}\n\n---\n以下は現在開いているノートの内容です。この内容を前提に回答してください:\n\n${noteContext.slice(0, 12000)}`
+      ? `${systemInstruction}\n\n---\n以下は現在開いているノートの内容です。この内容を前提に回答してください:\n\n${noteContext.slice(0, contextLimit)}`
       : systemInstruction;
 
     let lastError: unknown = null;
