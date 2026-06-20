@@ -350,42 +350,66 @@ export interface RemoteNote {
   updatedAt: string;
 }
 
-/** GitHub の _index.json からノートリストを取得
+const NOTE_LIST_CACHE_KEY = 'note-list-cache-v1';
+
+/** ノートリストをローカルキャッシュに保存 */
+export async function saveNoteListCache(list: RemoteNote[]): Promise<void> {
+  await Preferences.set({ key: NOTE_LIST_CACHE_KEY, value: JSON.stringify(list) });
+}
+
+/** ローカルキャッシュからノートリストを読み込む（なければ null） */
+export async function loadNoteListCache(): Promise<RemoteNote[] | null> {
+  const { value } = await Preferences.get({ key: NOTE_LIST_CACHE_KEY });
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as RemoteNote[];
+  } catch {
+    return null;
+  }
+}
+
+/** GitHub の最新ノートリストを取得（Git Trees + _index.json を並列実行）
  *  パスは Git Trees API の実際の値を使い、_index.json はメタデータ補完のみに使う。
- *  これにより archive/ ↔ notes/ のパスずれによる 404 を防ぐ。
  */
 export async function fetchNoteListFromGitHub(gitRemoteUrl: string): Promise<RemoteNote[]> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return [];
   const sync = new GitHubSync(token, repo, branch);
 
-  // Git Trees API でGitHub上の実際のパスを取得（常に正確）
-  const tree = await sync.fetchRemoteList();
-  // ファイル名 → 実際の GitHub パス・sha のマップ
-  const treeMap = new Map(tree.map(f => [f.name, f]));
+  // Git Trees API と _index.json を並列取得
+  const [tree, indexResult] = await Promise.all([
+    sync.fetchRemoteList(),
+    sync.fetchRemoteFile('_index.json').catch(() => null),
+  ]);
 
-  // _index.json からメタデータ（updatedAt など）を取得（失敗しても続行）
-  let metaMap = new Map<string, { updatedAt: string }>();
-  try {
-    const file = await sync.fetchRemoteFile('_index.json');
-    const index = JSON.parse(file.content) as Array<{ name: string; updatedAt: string }>;
-    for (const e of index) {
-      const fileName = e.name.split('/').pop() ?? e.name;
-      metaMap.set(fileName, { updatedAt: e.updatedAt ?? new Date().toISOString() });
-    }
-  } catch { /* _index.json がなくても動作する */ }
+  // _index.json からメタデータ（updatedAt）を補完
+  const metaMap = new Map<string, { updatedAt: string }>();
+  if (indexResult) {
+    try {
+      const index = JSON.parse(indexResult.content) as Array<{ name: string; updatedAt: string }>;
+      for (const e of index) {
+        const fileName = e.name.split('/').pop() ?? e.name;
+        metaMap.set(fileName, { updatedAt: e.updatedAt ?? new Date().toISOString() });
+      }
+    } catch { /* パース失敗は無視 */ }
+  }
 
-  return tree
+  const list = tree
     .filter(f => !f.name.startsWith('_'))
     .map(f => {
       const meta = metaMap.get(f.name);
       return {
         name: f.name,
-        remotePath: f.path,           // GitHub 上の実際のパス（archive/ でも notes/ でも正確）
+        remotePath: f.path,
         sha: f.sha,
         updatedAt: meta?.updatedAt ?? new Date().toISOString(),
       };
     });
+
+  // キャッシュを更新
+  saveNoteListCache(list).catch(() => {});
+
+  return list;
 }
 
 /** GitHub から1ファイルのコンテンツを取得 */

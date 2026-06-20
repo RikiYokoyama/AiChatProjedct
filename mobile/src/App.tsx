@@ -48,6 +48,7 @@ import {
   currentYearMonth,
   addEntryToIndex,
   appendToMasterMoc,
+  loadNoteListCache,
 } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
@@ -121,14 +122,22 @@ export default function App() {
       setMasterTags(cachedTags);
 
       if (cfg.gitRemoteUrl) {
-        // GitHub 直接アクセス: _index.json からノートリストを取得
-        try {
-          const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
-          mergeRemoteNotes(remoteList);
-        } catch {
-          // GitHub 取得失敗時はローカルストレージにフォールバック
-          setNotes(await listNotes());
+        // ① キャッシュがあれば即座に表示（0秒）
+        const cached = await loadNoteListCache();
+        if (cached && cached.length > 0) {
+          mergeRemoteNotes(cached);
         }
+
+        // ② バックグラウンドで GitHub から最新リストを取得して更新
+        fetchNoteListFromGitHub(cfg.gitRemoteUrl).then((remoteList) => {
+          mergeRemoteNotes(remoteList);
+        }).catch(async () => {
+          // GitHub 取得失敗かつキャッシュもない場合はローカルにフォールバック
+          if (!cached || cached.length === 0) {
+            setNotes(await listNotes());
+          }
+        });
+
         // マスタータグを GitHub からも取得
         readMasterTagsFromGitHub(cfg.gitRemoteUrl).then((remoteTags) => {
           if (remoteTags.length > 0) {
