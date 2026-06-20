@@ -269,17 +269,16 @@ export default function App() {
   // ノートタブでファイルを選択（GitHub 直接アクセス時はコンテンツをオンデマンド取得）
   const selectNoteForNoteTab = useCallback(async (note: Note) => {
     setNoteTabSelectedName(note.name);
+    setNoteTabContent(''); // 即座に前のノートの内容をクリア
     const cfg = configRef.current;
     if (cfg.gitRemoteUrl && note.remotePath && note.content === '') {
       // GitHub からコンテンツをフェッチ
       try {
         const { content, sha } = await fetchNoteContentFromGitHub(cfg.gitRemoteUrl, note.remotePath);
         setNoteTabContent(content);
-        // sha を notes state に反映
         setNotes(prev => prev.map(n => n.name === note.name ? { ...n, content, sha } : n));
       } catch (err) {
         alert('ノートの読み込みに失敗しました: ' + (err instanceof Error ? err.message : String(err)));
-        setNoteTabContent('');
       }
     } else {
       setNoteTabContent(note.content);

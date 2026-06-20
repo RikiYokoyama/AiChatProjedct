@@ -180,7 +180,11 @@ export default function NoteScreen({
         onTouchEnd={onTouchEnd}
       >
         {selectedNote ? (
-          editMode === 'edit' ? (
+          content === '' ? (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
+            </div>
+          ) : editMode === 'edit' ? (
             <textarea
               ref={editorRef}
               className="h-full w-full resize-none bg-[#090d19] p-4 font-mono text-sm leading-7 text-white outline-none"
