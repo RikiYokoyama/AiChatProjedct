@@ -201,8 +201,22 @@ export default function App() {
       setWikiLinkContextMenu(null);
       setShowSuggest(false);
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCloseMenu();
+        setShowNewNoteModal(false);
+        setShowMocModal(false);
+        setShowRenameModal(false);
+        // フォーカスをエディタに戻す
+        setTimeout(() => editorRef.current?.focus(), 0);
+      }
+    };
     window.addEventListener('click', handleCloseMenu);
-    return () => window.removeEventListener('click', handleCloseMenu);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('click', handleCloseMenu);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [masterTags, setMasterTags] = useState<string[]>([]);
@@ -639,6 +653,21 @@ export default function App() {
     setRibbonView('notes');
     setEditMode('edit');
   }
+
+  // グラフビュー用メモ化コールバック（毎レンダリングで新参照を作らない）
+  const handleGraphSelectNote = useCallback((note: Note) => {
+    openNote(note);
+    setRibbonView('notes');
+  }, []);
+
+  const handleGraphClose = useCallback(() => {
+    setRibbonView('notes');
+    setTimeout(() => editorRef.current?.focus(), 0);
+  }, []);
+
+  const handleGraphCreateNote = useCallback((name: string) => {
+    createNoteByName(name);
+  }, []);
 
   function scrollToHeading(text: string, level: number, line: number) {
     if (editMode === 'edit') {
@@ -1324,9 +1353,9 @@ export default function App() {
           <div className="absolute inset-y-0 bottom-0 left-12 right-0 z-40">
             <GraphView
               notes={notes}
-              onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
-              onClose={() => setRibbonView('notes')}
-              onCreateNote={(name) => createNoteByName(name)}
+              onSelectNote={handleGraphSelectNote}
+              onClose={handleGraphClose}
+              onCreateNote={handleGraphCreateNote}
             />
           </div>
         )}
@@ -1336,11 +1365,11 @@ export default function App() {
           <div className="absolute inset-y-0 bottom-0 left-12 right-0 z-40">
             <GraphView
               notes={notes}
-              onSelectNote={(note) => { openNote(note); setRibbonView('notes'); }}
-              onClose={() => setRibbonView('notes')}
+              onSelectNote={handleGraphSelectNote}
+              onClose={handleGraphClose}
               isLocal={true}
               centerNoteName={localGraphTarget}
-              onCreateNote={(name) => createNoteByName(name)}
+              onCreateNote={handleGraphCreateNote}
             />
           </div>
         )}

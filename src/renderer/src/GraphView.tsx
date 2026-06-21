@@ -102,6 +102,12 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   // 存在しないノード作成確認ダイアログ
   const [createConfirm, setCreateConfirm] = useState<string | null>(null);
 
+  // コールバックをRefで保持してuseEffectの依存配列から除外（Sigma再生成防止）
+  const onSelectNoteRef = useRef(onSelectNote);
+  const onCreateNoteRef = useRef(onCreateNote);
+  useEffect(() => { onSelectNoteRef.current = onSelectNote; }, [onSelectNote]);
+  useEffect(() => { onCreateNoteRef.current = onCreateNote; }, [onCreateNote]);
+
   const sigmaRef = useRef<Sigma | null>(null);
   const lineMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
   const coneMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
@@ -463,8 +469,8 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     sigma.on('doubleClickNode', ({ node }) => {
       const found = notes.find((note) => noteId(note) === node);
       if (found) {
-        onSelectNote(found);
-      } else if (onCreateNote) {
+        onSelectNoteRef.current(found);
+      } else if (onCreateNoteRef.current) {
         setCreateConfirm(node);
       }
     });
@@ -635,7 +641,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         containerRef2D.current.innerHTML = '';
       }
     };
-  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, onSelectNote, settings2D.nodeColor, settings2D.linkColor]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, settings2D.nodeColor, settings2D.linkColor]);
 
   // リンク表示やファイル名表示の切り替え時にSigmaを再描画
   useEffect(() => {
@@ -897,8 +903,8 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           const clickedNode = targetNodes[instanceId];
           const found = notes.find((n) => noteId(n) === clickedNode);
           if (found) {
-            onSelectNote(found);
-          } else if (onCreateNote) {
+            onSelectNoteRef.current(found);
+          } else if (onCreateNoteRef.current) {
             setCreateConfirm(clickedNode);
           }
         }
@@ -1234,7 +1240,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       lineMaterialRef.current = null;
       coneMaterialRef.current = null;
     };
-  }, [graph, activeElements, viewMode, isSettingsLoaded, groupRules, notes, onSelectNote, settings3D.textFadeThreshold, settings3D.nodeColor, settings3D.linkColor]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, groupRules, notes, settings3D.textFadeThreshold, settings3D.nodeColor, settings3D.linkColor]);
 
   // 3D リンク表示・矢印表示・カラー・太さの切り替え時にマテリアルの不透明度や色・太さを動的に更新
   useEffect(() => {
