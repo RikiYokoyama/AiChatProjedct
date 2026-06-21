@@ -364,18 +364,18 @@ export default function App() {
     return processed;
   };
 
-  const USER_HR_MARKER = ' HR_USER ';
-  const AI_HR_MARKER   = ' HR_AI ';
+  const USER_HR_CODE = '__HR_USER__';
+  const AI_HR_CODE   = '__HR_AI__';
 
-  // プレビュー時に ## User / ## AI / **User** 等のラベル行を区切り線マーカーに置換
+  // プレビュー時に ## User / ## AI / **User** 等のラベル行をインラインコードマーカーに置換
   const replaceUserAiWithHr = (text: string) => {
     if (!text) return '';
     return text
       .split('\n')
       .map(line => {
         const t = line.trim();
-        if (isUserLabel(t)) return USER_HR_MARKER;
-        if (isAiLabel(t))   return AI_HR_MARKER;
+        if (isUserLabel(t)) return `\`${USER_HR_CODE}\``;
+        if (isAiLabel(t))   return `\`${AI_HR_CODE}\``;
         return line;
       })
       .join('\n');
@@ -2001,11 +2001,13 @@ export default function App() {
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
-                      p: ({ children }) => {
-                        const raw = (typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : '').trim();
-                        if (raw === USER_HR_MARKER.trim()) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
-                        if (raw === AI_HR_MARKER.trim())   return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
-                        return <p>{children}</p>;
+                      code: ({ children, className }) => {
+                        if (!className) {
+                          const s = String(children).trim();
+                          if (s === USER_HR_CODE) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
+                          if (s === AI_HR_CODE)   return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
+                        }
+                        return <code className={className}>{children}</code>;
                       },
                       a: (props) => {
                         const { href, children } = props;
