@@ -74,12 +74,32 @@ const emptyConfig: AppConfig = {
 
 type RibbonView = 'notes' | 'graph' | 'settings' | 'local-graph' | 'search' | 'outline' | 'filetree';
 
-// 見出しパース
-function parseOutline(content: string): { level: number; text: string; line: number }[] {
-  return content.split('\n').flatMap((line, i) => {
-    const m = line.match(/^(#{1,6})\s+(.+)/);
-    return m ? [{ level: m[1].length, text: m[2].trim(), line: i }] : [];
-  });
+type OutlineItem =
+  | { kind: 'heading'; level: number; text: string; line: number }
+  | { kind: 'user' | 'ai'; text: string; line: number };
+
+// 見出し + **User**/**AI** パース
+function parseOutline(content: string): OutlineItem[] {
+  const lines = content.split('\n');
+  const items: OutlineItem[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const hm = line.match(/^(#{1,6})\s+(.+)/);
+    if (hm) {
+      items.push({ kind: 'heading', level: hm[1].length, text: hm[2].trim(), line: i });
+      continue;
+    }
+    if (/^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim())) {
+      const next = lines.slice(i + 1).find(l => l.trim() !== '');
+      if (next) items.push({ kind: 'user', text: next.trim().slice(0, 60), line: i });
+      continue;
+    }
+    if (/^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim())) {
+      const next = lines.slice(i + 1).find(l => l.trim() !== '');
+      if (next) items.push({ kind: 'ai', text: next.trim().slice(0, 60), line: i });
+    }
+  }
+  return items;
 }
 
 // ファイルツリー構築
@@ -1540,24 +1560,51 @@ export default function App() {
                 {!selectedNote ? (
                   <p className="px-2 py-4 text-xs text-gray-500 text-center">ファイルを開いてください</p>
                 ) : (() => {
-                  const headings = parseOutline(content);
-                  if (headings.length === 0) return (
+                  const items = parseOutline(content);
+                  if (items.length === 0) return (
                     <p className="px-2 py-4 text-xs text-gray-500 text-center">見出しがありません</p>
                   );
-                  const minLevel = Math.min(...headings.map(h => h.level));
+                  const headingItems = items.filter(h => h.kind === 'heading') as { kind: 'heading'; level: number; text: string; line: number }[];
+                  const minLevel = headingItems.length > 0 ? Math.min(...headingItems.map(h => h.level)) : 1;
                   return (
                     <div className="space-y-0.5">
-                      {headings.map((h, i) => (
-                        <button
-                          key={i}
-                          onClick={() => scrollToHeading(h.text, h.level, h.line)}
-                          className="flex w-full items-start gap-1.5 rounded px-2 py-1 text-left text-xs text-gray-300 hover:bg-white/5 hover:text-indigo-300 transition-colors"
-                          style={{ paddingLeft: `${(h.level - minLevel) * 12 + 8}px` }}
-                        >
-                          <span className="shrink-0 mt-0.5 text-[9px] text-gray-600 font-mono">H{h.level}</span>
-                          <span className="truncate">{h.text}</span>
-                        </button>
-                      ))}
+                      {items.map((item, i) => {
+                        if (item.kind === 'heading') {
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => scrollToHeading(item.text, item.level, item.line)}
+                              className="flex w-full items-start gap-1.5 rounded px-2 py-1 text-left text-xs text-gray-300 hover:bg-white/5 hover:text-indigo-300 transition-colors"
+                              style={{ paddingLeft: `${(item.level - minLevel) * 12 + 8}px` }}
+                            >
+                              <span className="shrink-0 mt-0.5 text-[9px] text-gray-600 font-mono">H{item.level}</span>
+                              <span className="truncate">{item.text}</span>
+                            </button>
+                          );
+                        }
+                        if (item.kind === 'user') {
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => scrollToHeading(item.text, 0, item.line)}
+                              className="flex w-full items-start gap-1.5 rounded px-2 py-1 text-left text-xs hover:bg-white/5 transition-colors"
+                            >
+                              <span className="shrink-0 mt-0.5 text-[9px] font-bold text-blue-400">U</span>
+                              <span className="truncate text-blue-300">{item.text}</span>
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => scrollToHeading(item.text, 0, item.line)}
+                            className="flex w-full items-start gap-1.5 rounded px-2 py-1 text-left text-xs hover:bg-white/5 transition-colors"
+                          >
+                            <span className="shrink-0 mt-0.5 text-[9px] font-bold text-emerald-400">AI</span>
+                            <span className="truncate text-emerald-300">{item.text}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   );
                 })()}

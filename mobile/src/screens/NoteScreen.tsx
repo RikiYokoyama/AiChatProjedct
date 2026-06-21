@@ -13,11 +13,31 @@ function buildMobileFileTree(notes: { name: string; remotePath?: string }[]): Re
   return tree;
 }
 
-function parseOutlineMobile(content: string) {
-  return content.split('\n').flatMap((line, i) => {
-    const m = line.match(/^(#{1,6})\s+(.+)/);
-    return m ? [{ level: m[1].length, text: m[2].trim(), line: i }] : [];
-  });
+type OutlineMobileItem =
+  | { kind: 'heading'; level: number; text: string; line: number }
+  | { kind: 'user' | 'ai'; text: string; line: number };
+
+function parseOutlineMobile(content: string): OutlineMobileItem[] {
+  const lines = content.split('\n');
+  const items: OutlineMobileItem[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const hm = line.match(/^(#{1,6})\s+(.+)/);
+    if (hm) {
+      items.push({ kind: 'heading', level: hm[1].length, text: hm[2].trim(), line: i });
+      continue;
+    }
+    if (/^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim())) {
+      const next = lines.slice(i + 1).find(l => l.trim() !== '');
+      if (next) items.push({ kind: 'user', text: next.trim().slice(0, 60), line: i });
+      continue;
+    }
+    if (/^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim())) {
+      const next = lines.slice(i + 1).find(l => l.trim() !== '');
+      if (next) items.push({ kind: 'ai', text: next.trim().slice(0, 60), line: i });
+    }
+  }
+  return items;
 }
 import { Note, noteTitle } from '../lib/notes';
 import MarkdownView from '../components/MarkdownView';
@@ -386,36 +406,65 @@ export default function NoteScreen({
             </div>
             <div className="flex-1 overflow-y-auto px-3 pb-4">
               {(() => {
-                const headings = parseOutlineMobile(content);
-                if (headings.length === 0) return (
+                const items = parseOutlineMobile(content);
+                if (items.length === 0) return (
                   <p className="py-6 text-center text-sm text-gray-500">見出しがありません</p>
                 );
-                const minLevel = Math.min(...headings.map(h => h.level));
+                const headingItems = items.filter(h => h.kind === 'heading') as { kind: 'heading'; level: number; text: string; line: number }[];
+                const minLevel = headingItems.length > 0 ? Math.min(...headingItems.map(h => h.level)) : 1;
+
+                const scrollTo = (text: string, level: number) => {
+                  setShowOutline(false);
+                  if (editMode === 'preview' && previewRef.current && level > 0) {
+                    const els = previewRef.current.querySelectorAll(`h${level}`);
+                    for (const el of els) {
+                      if (el.textContent?.trim() === text) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        break;
+                      }
+                    }
+                  }
+                };
+
                 return (
                   <div className="space-y-0.5">
-                    {headings.map((h, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setShowOutline(false);
-                          if (editMode === 'preview' && previewRef.current) {
-                            const tag = `h${h.level}`;
-                            const els = previewRef.current.querySelectorAll(tag);
-                            for (const el of els) {
-                              if (el.textContent?.trim() === h.text) {
-                                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                                break;
-                              }
-                            }
-                          }
-                        }}
-                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
-                        style={{ paddingLeft: `${(h.level - minLevel) * 14 + 12}px` }}
-                      >
-                        <span className="shrink-0 text-[9px] font-mono text-gray-600">H{h.level}</span>
-                        <span className="text-sm text-gray-200 truncate">{h.text}</span>
-                      </button>
-                    ))}
+                    {items.map((item, i) => {
+                      if (item.kind === 'heading') {
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => scrollTo(item.text, item.level)}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
+                            style={{ paddingLeft: `${(item.level - minLevel) * 14 + 12}px` }}
+                          >
+                            <span className="shrink-0 text-[9px] font-mono text-gray-600">H{item.level}</span>
+                            <span className="text-sm text-gray-200 truncate">{item.text}</span>
+                          </button>
+                        );
+                      }
+                      if (item.kind === 'user') {
+                        return (
+                          <button
+                            key={i}
+                            onClick={() => { setShowOutline(false); }}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
+                          >
+                            <span className="shrink-0 text-[9px] font-bold text-blue-400">U</span>
+                            <span className="text-sm text-blue-300 truncate">{item.text}</span>
+                          </button>
+                        );
+                      }
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => { setShowOutline(false); }}
+                          className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
+                        >
+                          <span className="shrink-0 text-[9px] font-bold text-emerald-400">AI</span>
+                          <span className="text-sm text-emerald-300 truncate">{item.text}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 );
               })()}
