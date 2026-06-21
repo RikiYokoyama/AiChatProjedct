@@ -364,16 +364,24 @@ export default function App() {
     return processed;
   };
 
-  // プレビュー時に ## User / ## AI / **User** 等のラベル行を非表示にする前処理
-  const hideUserAiLabels = (text: string) => {
+  const USER_HR_MARKER = ' HR_USER ';
+  const AI_HR_MARKER   = ' HR_AI ';
+
+  // プレビュー時に ## User / ## AI / **User** 等のラベル行を区切り線マーカーに置換
+  const replaceUserAiWithHr = (text: string) => {
     if (!text) return '';
     return text
       .split('\n')
-      .filter(line => !isUserLabel(line.trim()) && !isAiLabel(line.trim()))
+      .map(line => {
+        const t = line.trim();
+        if (isUserLabel(t)) return USER_HR_MARKER;
+        if (isAiLabel(t))   return AI_HR_MARKER;
+        return line;
+      })
       .join('\n');
   };
 
-  const preprocessContent = (text: string) => hideUserAiLabels(preprocessWikiLinks(text));
+  const preprocessContent = (text: string) => replaceUserAiWithHr(preprocessWikiLinks(text));
 
   const createNewWikiNote = async (noteName: string) => {
     let filename = noteName;
@@ -1993,6 +2001,12 @@ export default function App() {
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
+                      p: ({ children }) => {
+                        const raw = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : '';
+                        if (raw === USER_HR_MARKER) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
+                        if (raw === AI_HR_MARKER)   return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
+                        return <p>{children}</p>;
+                      },
                       a: (props) => {
                         const { href, children } = props;
                         if (href && href.startsWith('#wiki-')) {
