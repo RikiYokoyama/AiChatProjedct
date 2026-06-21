@@ -78,29 +78,38 @@ type OutlineItem =
   | { kind: 'heading'; level: number; text: string; line: number }
   | { kind: 'user' | 'ai'; text: string; line: number };
 
-// 見出し + **User**/**AI** パース
+// User/AIラベル判定（## User / **User** 両対応）
+function isUserLabel(t: string) {
+  return /^#{1,6}\s+(User|ユーザー)$/i.test(t) ||
+         /^\*\*(User|ユーザー)\*\*$/i.test(t) ||
+         /^(User|ユーザー)[:：]?\s*$/i.test(t);
+}
+function isAiLabel(t: string) {
+  return /^#{1,6}\s+(AI|Claude|Assistant)$/i.test(t) ||
+         /^\*\*(AI|Claude|Assistant)\*\*$/i.test(t) ||
+         /^(AI|Claude|Assistant)[:：]?\s*$/i.test(t);
+}
+
+// 見出し + User/AI ラベルパース
 function parseOutline(content: string): OutlineItem[] {
   const lines = content.split('\n');
   const items: OutlineItem[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const hm = line.match(/^(#{1,6})\s+(.+)/);
-    if (hm) {
-      items.push({ kind: 'heading', level: hm[1].length, text: hm[2].trim(), line: i });
-      continue;
-    }
-    const isUser = /^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim());
-    const isAi   = /^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim());
-    if (isUser || isAi) {
-      // 内容行のインデックスを特定
+    const t = lines[i].trim();
+    if (isUserLabel(t) || isAiLabel(t)) {
       let contentLine = -1;
       for (let j = i + 1; j < lines.length; j++) {
         if (lines[j].trim() !== '') { contentLine = j; break; }
       }
       if (contentLine >= 0) {
         const text = lines[contentLine].trim().slice(0, 80);
-        items.push({ kind: isUser ? 'user' : 'ai', text, line: contentLine });
+        items.push({ kind: isUserLabel(t) ? 'user' : 'ai', text, line: contentLine });
       }
+      continue;
+    }
+    const hm = t.match(/^(#{1,6})\s+(.+)/);
+    if (hm) {
+      items.push({ kind: 'heading', level: hm[1].length, text: hm[2].trim(), line: i });
     }
   }
   return items;
@@ -355,16 +364,12 @@ export default function App() {
     return processed;
   };
 
-  // プレビュー時に **User** / **AI** ラベル行を非表示にする前処理
+  // プレビュー時に ## User / ## AI / **User** 等のラベル行を非表示にする前処理
   const hideUserAiLabels = (text: string) => {
     if (!text) return '';
     return text
       .split('\n')
-      .filter(line => {
-        const t = line.trim();
-        return !/^\*\*(User|AI|Claude|Assistant)\*\*$/i.test(t)
-            && !/^(User|AI|Claude|Assistant)[:：]?\s*$/i.test(t);
-      })
+      .filter(line => !isUserLabel(line.trim()) && !isAiLabel(line.trim()))
       .join('\n');
   };
 

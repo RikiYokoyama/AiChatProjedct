@@ -2,14 +2,21 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { preprocessWikiLinks } from '../lib/notes';
 
+function isUserLabelLine(t: string) {
+  return /^#{1,6}\s+(User|ユーザー)$/i.test(t) ||
+         /^\*\*(User|ユーザー)\*\*$/i.test(t) ||
+         /^(User|ユーザー)[:：]?\s*$/i.test(t);
+}
+function isAiLabelLine(t: string) {
+  return /^#{1,6}\s+(AI|Claude|Assistant)$/i.test(t) ||
+         /^\*\*(AI|Claude|Assistant)\*\*$/i.test(t) ||
+         /^(AI|Claude|Assistant)[:：]?\s*$/i.test(t);
+}
+
 function hideUserAiLabels(text: string): string {
   return text
     .split('\n')
-    .filter(line => {
-      const t = line.trim();
-      return !/^\*\*(User|AI|Claude|Assistant)\*\*$/i.test(t)
-          && !/^(User|AI|Claude|Assistant)[:：]?\s*$/i.test(t);
-    })
+    .filter(line => !isUserLabelLine(line.trim()) && !isAiLabelLine(line.trim()))
     .join('\n');
 }
 
