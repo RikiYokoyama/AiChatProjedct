@@ -2002,9 +2002,9 @@ export default function App() {
                     remarkPlugins={[remarkGfm]}
                     components={{
                       p: ({ children }) => {
-                        const raw = typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : '';
-                        if (raw === USER_HR_MARKER) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
-                        if (raw === AI_HR_MARKER)   return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
+                        const raw = (typeof children === 'string' ? children : Array.isArray(children) ? children.join('') : '').trim();
+                        if (raw === USER_HR_MARKER.trim()) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
+                        if (raw === AI_HR_MARKER.trim())   return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
                         return <p>{children}</p>;
                       },
                       a: (props) => {
