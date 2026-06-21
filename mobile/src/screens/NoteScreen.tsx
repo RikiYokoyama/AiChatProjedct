@@ -27,14 +27,17 @@ function parseOutlineMobile(content: string): OutlineMobileItem[] {
       items.push({ kind: 'heading', level: hm[1].length, text: hm[2].trim(), line: i });
       continue;
     }
-    if (/^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim())) {
-      const next = lines.slice(i + 1).find(l => l.trim() !== '');
-      if (next) items.push({ kind: 'user', text: next.trim().slice(0, 60), line: i });
-      continue;
-    }
-    if (/^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim())) {
-      const next = lines.slice(i + 1).find(l => l.trim() !== '');
-      if (next) items.push({ kind: 'ai', text: next.trim().slice(0, 60), line: i });
+    const isUser = /^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim());
+    const isAi   = /^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim());
+    if (isUser || isAi) {
+      let contentLine = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim() !== '') { contentLine = j; break; }
+      }
+      if (contentLine >= 0) {
+        const text = lines[contentLine].trim().slice(0, 80);
+        items.push({ kind: isUser ? 'user' : 'ai', text, line: contentLine });
+      }
     }
   }
   return items;
@@ -415,15 +418,28 @@ export default function NoteScreen({
 
                 const scrollTo = (text: string, level: number) => {
                   setShowOutline(false);
-                  if (editMode === 'preview' && previewRef.current && level > 0) {
-                    const els = previewRef.current.querySelectorAll(`h${level}`);
-                    for (const el of els) {
-                      if (el.textContent?.trim() === text) {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        break;
+                  if (!previewRef.current) return;
+                  requestAnimationFrame(() => {
+                    const div = previewRef.current!;
+                    if (level > 0) {
+                      const els = div.querySelectorAll(`h${level}`);
+                      for (const el of els) {
+                        if (el.textContent?.trim() === text) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          break;
+                        }
+                      }
+                    } else {
+                      const els = div.querySelectorAll('p, li, blockquote');
+                      for (const el of els) {
+                        const elText = el.textContent?.trim() ?? '';
+                        if (elText.startsWith(text.slice(0, 20)) && text.length > 0) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          break;
+                        }
                       }
                     }
-                  }
+                  });
                 };
 
                 return (
@@ -446,7 +462,7 @@ export default function NoteScreen({
                         return (
                           <button
                             key={i}
-                            onClick={() => { setShowOutline(false); }}
+                            onClick={() => scrollTo(item.text, 0)}
                             className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
                           >
                             <span className="shrink-0 text-[9px] font-bold text-blue-400">U</span>
@@ -457,7 +473,7 @@ export default function NoteScreen({
                       return (
                         <button
                           key={i}
-                          onClick={() => { setShowOutline(false); }}
+                          onClick={() => scrollTo(item.text, 0)}
                           className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left active:bg-white/5"
                         >
                           <span className="shrink-0 text-[9px] font-bold text-emerald-400">AI</span>

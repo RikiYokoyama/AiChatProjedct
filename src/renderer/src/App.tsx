@@ -89,14 +89,18 @@ function parseOutline(content: string): OutlineItem[] {
       items.push({ kind: 'heading', level: hm[1].length, text: hm[2].trim(), line: i });
       continue;
     }
-    if (/^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim())) {
-      const next = lines.slice(i + 1).find(l => l.trim() !== '');
-      if (next) items.push({ kind: 'user', text: next.trim().slice(0, 60), line: i });
-      continue;
-    }
-    if (/^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim())) {
-      const next = lines.slice(i + 1).find(l => l.trim() !== '');
-      if (next) items.push({ kind: 'ai', text: next.trim().slice(0, 60), line: i });
+    const isUser = /^\*\*User\*\*$/i.test(line.trim()) || /^User[:：]?\s*$/i.test(line.trim());
+    const isAi   = /^\*\*(AI|Claude|Assistant)\*\*$/i.test(line.trim()) || /^(AI|Claude|Assistant)[:：]?\s*$/i.test(line.trim());
+    if (isUser || isAi) {
+      // 内容行のインデックスを特定
+      let contentLine = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (lines[j].trim() !== '') { contentLine = j; break; }
+      }
+      if (contentLine >= 0) {
+        const text = lines[contentLine].trim().slice(0, 80);
+        items.push({ kind: isUser ? 'user' : 'ai', text, line: contentLine });
+      }
     }
   }
   return items;
@@ -714,12 +718,24 @@ export default function App() {
     } else {
       const div = previewDivRef.current;
       if (!div) return;
-      const tag = `h${level}`;
-      const headings = div.querySelectorAll(tag);
-      for (const h of headings) {
-        if (h.textContent?.trim() === text) {
-          h.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          break;
+      if (level > 0) {
+        // Markdown見出し: h1〜h6 要素を探す
+        const headings = div.querySelectorAll(`h${level}`);
+        for (const h of headings) {
+          if (h.textContent?.trim() === text) {
+            h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            break;
+          }
+        }
+      } else {
+        // User/AI コンテンツ: テキストが一致する段落・要素を探す
+        const els = div.querySelectorAll('p, li, blockquote');
+        for (const el of els) {
+          const elText = el.textContent?.trim() ?? '';
+          if (elText.startsWith(text.slice(0, 20)) && text.length > 0) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            break;
+          }
         }
       }
     }
