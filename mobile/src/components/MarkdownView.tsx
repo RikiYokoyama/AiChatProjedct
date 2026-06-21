@@ -2,6 +2,17 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { preprocessWikiLinks } from '../lib/notes';
 
+function hideUserAiLabels(text: string): string {
+  return text
+    .split('\n')
+    .filter(line => {
+      const t = line.trim();
+      return !/^\*\*(User|AI|Claude|Assistant)\*\*$/i.test(t)
+          && !/^(User|AI|Claude|Assistant)[:：]?\s*$/i.test(t);
+    })
+    .join('\n');
+}
+
 // Wikiリンク（[[...]]）対応のMarkdownレンダラー
 export default function MarkdownView({
   text,
@@ -52,7 +63,7 @@ export default function MarkdownView({
           },
         }}
       >
-        {preprocessWikiLinks(text)}
+        {hideUserAiLabels(preprocessWikiLinks(text))}
       </ReactMarkdown>
     </div>
   );

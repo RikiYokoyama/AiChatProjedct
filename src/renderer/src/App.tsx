@@ -351,6 +351,21 @@ export default function App() {
     return processed;
   };
 
+  // プレビュー時に **User** / **AI** ラベル行を非表示にする前処理
+  const hideUserAiLabels = (text: string) => {
+    if (!text) return '';
+    return text
+      .split('\n')
+      .filter(line => {
+        const t = line.trim();
+        return !/^\*\*(User|AI|Claude|Assistant)\*\*$/i.test(t)
+            && !/^(User|AI|Claude|Assistant)[:：]?\s*$/i.test(t);
+      })
+      .join('\n');
+  };
+
+  const preprocessContent = (text: string) => hideUserAiLabels(preprocessWikiLinks(text));
+
   const createNewWikiNote = async (noteName: string) => {
     let filename = noteName;
     if (!filename.endsWith('.md')) {
@@ -2000,7 +2015,7 @@ export default function App() {
                       }
                     }}
                   >
-                    {preprocessWikiLinks(content)}
+                    {preprocessContent(content)}
                   </ReactMarkdown>
                 </div>
               )
@@ -2053,7 +2068,7 @@ export default function App() {
                       }
                     }}
                   >
-                    {preprocessWikiLinks(streamedText)}
+                    {preprocessContent(streamedText)}
                   </ReactMarkdown>
                 </div>
               )}
