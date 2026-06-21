@@ -75,7 +75,12 @@ function getFilesRecursively(dir, filterExt = '.md') {
   return results;
 }
 
-// コミット前にルートの .md を archive/YYYY-MM/ へ移動
+// YYYY-MM 形式のフォルダ名かチェック
+function isYearMonthDir(name) {
+  return /^\d{4}-\d{2}$/.test(name);
+}
+
+// コミット前にルートの .md を YYYY-MM/ へ移動
 function packMarkdownFiles(notesPath) {
   const files = fs.readdirSync(notesPath, { withFileTypes: true });
   const mdFiles = files.filter(f => f.isFile() && f.name.endsWith('.md'));
@@ -84,55 +89,55 @@ function packMarkdownFiles(notesPath) {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
-  const archiveDir = path.join(notesPath, 'archive', `${year}-${month}`);
+  const monthDir = path.join(notesPath, `${year}-${month}`);
 
-  if (!fs.existsSync(archiveDir)) {
-    fs.mkdirSync(archiveDir, { recursive: true });
+  if (!fs.existsSync(monthDir)) {
+    fs.mkdirSync(monthDir, { recursive: true });
   }
 
   for (const file of mdFiles) {
     const srcPath = path.join(notesPath, file.name);
-    const destPath = path.join(archiveDir, file.name);
-    // 同名がすでにあれば中身を比較し、同じなら上書き、違えば上書き（最新優先）
+    const destPath = path.join(monthDir, file.name);
     fs.renameSync(srcPath, destPath);
     console.log(`Packed: ${srcPath} -> ${destPath}`);
   }
 }
 
-// ローカルの archive/ と backup/ を削除してルートだけに保つ
+// ローカルの YYYY-MM/ フォルダと backup/ を削除してルートだけに保つ
 function cleanLocalArchive(notesPath) {
-  const archiveDir = path.join(notesPath, 'archive');
   const backupDir = path.join(notesPath, 'backup');
-  if (fs.existsSync(archiveDir)) {
-    fs.rmSync(archiveDir, { recursive: true, force: true });
-    console.log('Removed local archive/');
-  }
   if (fs.existsSync(backupDir)) {
     fs.rmSync(backupDir, { recursive: true, force: true });
     console.log('Removed local backup/');
   }
+  const entries = fs.readdirSync(notesPath, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory() && isYearMonthDir(entry.name)) {
+      const dirPath = path.join(notesPath, entry.name);
+      fs.rmSync(dirPath, { recursive: true, force: true });
+      console.log(`Removed local ${entry.name}/`);
+    }
+  }
 }
 
-// 同期後に archive/ の最新ファイルをルートに展開し、archive/ と backup/ を削除
+// 同期後に YYYY-MM/ の最新ファイルをルートに展開し、YYYY-MM/ と backup/ を削除
 function unpackMarkdownFiles(notesPath) {
-  const archiveRoot = path.join(notesPath, 'archive');
-  if (!fs.existsSync(archiveRoot)) return;
+  const entries = fs.readdirSync(notesPath, { withFileTypes: true });
+  const monthDirs = entries
+    .filter(e => e.isDirectory() && isYearMonthDir(e.name))
+    .map(e => e.name)
+    .sort();
 
-  const archivedFiles = getFilesRecursively(archiveRoot, '.md');
+  if (monthDirs.length === 0) return;
 
-  // 同名ファイルが複数ある場合、フォルダ名（YYYY-MM）が最新のものだけ残す
+  // 同名ファイルが複数フォルダにある場合、最新月（フォルダ名が大きい方）を優先
   const latestMap = new Map();
-  for (const srcPath of archivedFiles) {
-    const filename = path.basename(srcPath);
-    const existing = latestMap.get(filename);
-    if (!existing) {
+  for (const monthName of monthDirs) {
+    const monthPath = path.join(notesPath, monthName);
+    const mdFiles = getFilesRecursively(monthPath, '.md');
+    for (const srcPath of mdFiles) {
+      const filename = path.basename(srcPath);
       latestMap.set(filename, srcPath);
-    } else {
-      const existingFolder = path.dirname(existing).split(path.sep).pop() ?? '';
-      const currentFolder = path.dirname(srcPath).split(path.sep).pop() ?? '';
-      if (currentFolder > existingFolder) {
-        latestMap.set(filename, srcPath);
-      }
     }
   }
 
@@ -142,7 +147,6 @@ function unpackMarkdownFiles(notesPath) {
     console.log(`Unpacked: ${srcPath} -> ${destPath}`);
   }
 
-  // ローカルの archive/ と backup/ を削除
   cleanLocalArchive(notesPath);
 }
 
@@ -279,7 +283,8 @@ function startFileWatcher(notesPath) {
       if (!filename) return;
       const normalized = filename.replace(/\\/g, '/');
       if (!normalized.endsWith('.md')) return;
-      if (normalized.startsWith('archive/') || normalized.startsWith('backup/')) return;
+      if (normalized.startsWith('backup/')) return;
+      if (/^\d{4}-\d{2}\//.test(normalized)) return;
       clearTimeout(commitDebounceTimer);
       commitDebounceTimer = setTimeout(autoCommit, 30000);
     });
@@ -874,7 +879,7 @@ async function runFolderMigration() {
   const log = [];
   try {
     // サブフォルダを作成
-    for (const dir of ['notes', 'memos', 'archive', 'moc']) {
+    for (const dir of ['notes', 'memos', 'moc']) {
       const dirPath = path.join(notesPath, dir);
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
     }
