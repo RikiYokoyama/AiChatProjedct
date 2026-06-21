@@ -39,11 +39,20 @@ export function extractWikiLinks(content: string): string[] {
   return Array.from(links);
 }
 
+// 作成日時行 "作成日時: YYYY/MM/DD HH:mm" → ISO文字列（失敗時はnull）
+export function extractCreatedAt(content: string): string | null {
+  const m = content.match(/^作成日時[:：]\s*(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/m);
+  if (!m) return null;
+  const [, y, mo, d, h = '0', min = '0'] = m;
+  const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min));
+  return isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
 export function buildNote(name: string, content: string, updatedAt?: string): Note {
   return {
     name,
     content,
-    updatedAt: updatedAt ?? new Date().toISOString(),
+    updatedAt: extractCreatedAt(content) ?? updatedAt ?? new Date().toISOString(),
     tags: extractTags(content),
     wikiLinks: extractWikiLinks(content),
   };

@@ -481,6 +481,16 @@ function saveMetadataCache(cache) {
 }
 
 // タグ抽出（先頭20,000文字制限でReDoS/フリーズ防止）
+// 作成日時行 "作成日時: YYYY/MM/DD HH:mm" → ISO文字列（失敗時はnull）
+function extractCreatedAt(content) {
+  if (!content) return null;
+  const m = content.match(/^作成日時[:：]\s*(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/m);
+  if (!m) return null;
+  const [, y, mo, d, h = '0', min = '0'] = m;
+  const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min));
+  return isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
 function extractTags(content) {
   const tags = [];
   if (!content) return tags;
@@ -635,8 +645,10 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
                 const t = l.trim();
                 return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
               }).length === 0;
+              const createdAt = extractCreatedAt(content);
               cached = {
                 updatedAt: mtimeStr,
+                createdAt,
                 tags,
                 wikiLinks,
                 isEmpty
@@ -648,7 +660,7 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
             results.push({
               name: relativePath,
               path: filePath,
-              updatedAt: mtimeStr,
+              updatedAt: cached.createdAt ?? mtimeStr,
               content: '', // 本文ロードをスキップ
               tags: cached.tags,
               wikiLinks: cached.wikiLinks,
