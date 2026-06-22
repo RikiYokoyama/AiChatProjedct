@@ -1926,11 +1926,10 @@ export default function App() {
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 border-b border-white/5 pb-2 text-xs text-gray-400 px-1">
-                  <span className="text-gray-500 shrink-0">{filteredNotes.length}<span className="text-gray-600">/{notes.length}件</span></span>
                   <select
                     value={tagFilter}
                     onChange={(e) => setTagFilter(e.target.value)}
-                    className="ml-auto max-w-[110px] rounded border border-white/10 bg-[#0f172a] px-2 py-1 outline-none text-gray-200"
+                    className="flex-1 min-w-0 rounded border border-white/10 bg-[#0f172a] px-2 py-1 outline-none text-gray-200"
                     title="タグで絞り込み"
                   >
                     <option value="">タグ: すべて</option>
@@ -1941,7 +1940,7 @@ export default function App() {
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as any)}
-                    className="rounded border border-white/10 bg-[#0f172a] px-2 py-1 outline-none text-gray-200"
+                    className="flex-1 min-w-0 rounded border border-white/10 bg-[#0f172a] px-2 py-1 outline-none text-gray-200"
                   >
                     <option value="date-desc">作成日新しい順</option>
                     <option value="date-asc">作成日古い順</option>
@@ -1978,6 +1977,10 @@ export default function App() {
                     );
                   })
                 )}
+              </div>
+              {/* 件数（右下） */}
+              <div className="shrink-0 border-t border-white/5 px-3 py-1 text-right text-[11px] text-gray-500">
+                {filteredNotes.length}<span className="text-gray-600">/{notes.length}件</span>
               </div>
             </>
           )}
