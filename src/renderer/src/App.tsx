@@ -276,6 +276,7 @@ export default function App() {
   const [vaultError, setVaultError] = useState('');
   const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
   const [privateMode, setPrivateMode] = useState(false); // true=プライベート専用一覧を表示
+  const [tagFilter, setTagFilter] = useState(''); // ノート一覧のタグ絞り込み（空=すべて）
   const [showMocModal, setShowMocModal] = useState(false);
   const [mocTitle, setMocTitle] = useState('');
   const [mocAiMode, setMocAiMode] = useState(false);
@@ -475,6 +476,10 @@ export default function App() {
     let result = notes.filter((n) =>
       privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')
     );
+    // タグ絞り込み（コンボボックス）
+    if (tagFilter) {
+      result = result.filter((note) => (note.tags || []).includes(tagFilter));
+    }
     const query = searchQuery.trim();
     if (query) {
       const queryLower = query.toLowerCase();
@@ -513,7 +518,7 @@ export default function App() {
         return db.getTime() - da.getTime();
       }
     });
-  }, [notes, searchQuery, sortBy, privateMode]);
+  }, [notes, searchQuery, sortBy, privateMode, tagFilter]);
 
   // 検索サジェスト候補の抽出
   const suggestions = useMemo(() => {
@@ -1599,7 +1604,7 @@ export default function App() {
                                     className={`flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left text-xs hover:bg-white/10 ${selectedNote?.name === n.name ? 'text-indigo-300 font-medium' : 'text-gray-400'}`}
                                   >
                                     <FileText className="h-3 w-3 shrink-0" />
-                                    <span className="truncate">{n.name.replace(/\.md$/i, '')}</span>
+                                    <span className="truncate">{n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
                                   </button>
                                 ))}
                               </div>
@@ -1645,7 +1650,7 @@ export default function App() {
                             >
                               <span className="text-[10px] text-gray-500">{isExpanded ? '▼' : '▶'}</span>
                               <FileText className="h-3 w-3 shrink-0" />
-                              <span className="truncate">{cleanName}</span>
+                              <span className="truncate">{cleanName.replace(/^.*\//, '')}</span>
                             </button>
                             {isExpanded && (
                               <div className="pl-4 border-l border-white/5 ml-2.5 space-y-2 py-1">
@@ -1920,8 +1925,19 @@ export default function App() {
                     <button onClick={handleVaultLock} className="rounded bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold hover:bg-emerald-500/30">ロックして戻る</button>
                   </div>
                 )}
-                <div className="flex items-center justify-between border-b border-white/5 pb-2 text-xs text-gray-400 px-1">
-                  <span className="text-gray-500">{filteredNotes.length}<span className="text-gray-600">/{notes.length}件</span></span>
+                <div className="flex items-center gap-1.5 border-b border-white/5 pb-2 text-xs text-gray-400 px-1">
+                  <span className="text-gray-500 shrink-0">{filteredNotes.length}<span className="text-gray-600">/{notes.length}件</span></span>
+                  <select
+                    value={tagFilter}
+                    onChange={(e) => setTagFilter(e.target.value)}
+                    className="ml-auto max-w-[110px] rounded border border-white/10 bg-[#0f172a] px-2 py-1 outline-none text-gray-200"
+                    title="タグで絞り込み"
+                  >
+                    <option value="">タグ: すべて</option>
+                    {Object.entries(allTagsMap).map(([tag, tagNotes]) => (
+                      <option key={tag} value={tag}>#{tag} ({tagNotes.length})</option>
+                    ))}
+                  </select>
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as any)}
