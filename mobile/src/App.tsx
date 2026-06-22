@@ -326,16 +326,25 @@ export default function App() {
   // vault 解除後に private ノートの displayName を解決して _names.enc を更新する
   async function applyPrivateDisplayNames(url: string) {
     // Step1: GitHub から private/ 以下のノートリストを直接取得
-    const remoteList = await fetchNoteListFromGitHub(url).catch(() => []);
+    const remoteList = await fetchNoteListFromGitHub(url).catch((e) => { console.error('[DBG] fetchList失敗:', e); return []; });
     const tsNotes = remoteList.filter(r => {
       const rn = (r.remotePath ?? r.name).split('/').pop() ?? '';
       return (r.remotePath ?? '').startsWith('private/') && /^\d{13,}\.md$/.test(rn);
     });
 
     // Step2: 既存の _names.enc を読み込む
-    const existingNames = await loadPrivateNamesFromGitHub(url).catch(() => ({} as Record<string, string>));
+    let existingNames: Record<string, string> = {};
+    try {
+      existingNames = await loadPrivateNamesFromGitHub(url);
+    } catch (e) {
+      console.error('[DBG] _names.enc 読み込み失敗:', e);
+      alert('[DBG] _names.enc 復号失敗: ' + String(e));
+    }
     const updatedNames = { ...existingNames };
     let changed = false;
+
+    // デバッグ: 状況を表示
+    alert(`[DBG] tsNotes:${tsNotes.map(r=>r.name).join(',')} | existing keys:${Object.keys(existingNames).join(',')}`);
 
     // Step3: 未登録のノートを復号してタイトル取得
     for (const r of tsNotes) {
@@ -350,6 +359,7 @@ export default function App() {
         }
       } catch (e) {
         console.error('displayName取得失敗:', rn, e);
+        alert('[DBG] ノート復号失敗 ' + rn + ': ' + String(e));
       }
     }
 
