@@ -276,6 +276,7 @@ export default function App() {
   const [vaultError, setVaultError] = useState('');
   const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
   const [newNoteIsPrivate, setNewNoteIsPrivate] = useState(false);
+  const [privateMode, setPrivateMode] = useState(false); // true=プライベート専用一覧を表示
   const [showMocModal, setShowMocModal] = useState(false);
   const [mocTitle, setMocTitle] = useState('');
   const [mocAiMode, setMocAiMode] = useState(false);
@@ -471,8 +472,10 @@ export default function App() {
   }, [notes]);
 
   const filteredNotes = useMemo(() => {
-    // private/ 配下はロック解除中のみ一覧に表示
-    let result = notes.filter((n) => vaultUnlocked || !n.name.startsWith('private/'));
+    // privateMode=true ならprivate専用一覧、それ以外は通常（private除外）
+    let result = notes.filter((n) =>
+      privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')
+    );
     const query = searchQuery.trim();
     if (query) {
       const queryLower = query.toLowerCase();
@@ -511,7 +514,7 @@ export default function App() {
         return db.getTime() - da.getTime();
       }
     });
-  }, [notes, searchQuery, sortBy, vaultUnlocked]);
+  }, [notes, searchQuery, sortBy, privateMode]);
 
   // 検索サジェスト候補の抽出
   const suggestions = useMemo(() => {
@@ -534,14 +537,14 @@ export default function App() {
     } else if (queryLower.startsWith('link:')) {
       const val = query.substring(5).trim().toLowerCase();
       return notes
-        .filter((n) => (vaultUnlocked || !n.name.startsWith('private/')) && n.name.toLowerCase().includes(val))
+        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name.toLowerCase().includes(val))
         .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     } else {
       return notes
-        .filter((n) => (vaultUnlocked || !n.name.startsWith('private/')) && n.name.toLowerCase().includes(queryLower))
+        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name.toLowerCase().includes(queryLower))
         .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     }
-  }, [notes, searchQuery, allTagsMap, vaultUnlocked]);
+  }, [notes, searchQuery, allTagsMap, privateMode]);
 
   const selectSuggestion = (s: { type: string; value: string }) => {
     if (s.type === 'tag') {
@@ -711,7 +714,7 @@ export default function App() {
     }
   }
 
-  // リボンの鍵アイコン: 未作成→作成 / ロック中→解除 / 解除中→ロック
+  // リボンの鍵アイコン: 未作成→作成 / ロック中→解除 / 解除中→ロックして通常一覧へ戻る
   function handleVaultKeyClick() {
     if (!vaultExists) {
       setVaultPwInput(''); setVaultPwInput2(''); setVaultError(''); setShowVaultSetup(true);
@@ -731,6 +734,8 @@ export default function App() {
       return;
     }
     setVaultUnlocked(true);
+    setPrivateMode(true); // プライベート専用一覧に切り替え
+    setRibbonView('notes');
     setShowVaultUnlock(false);
     setVaultPwInput('');
     const pending = pendingPrivateNote;
@@ -756,15 +761,17 @@ export default function App() {
     }
     setVaultExists(true);
     setVaultUnlocked(true);
+    setPrivateMode(true);
     setShowVaultSetup(false);
     setVaultPwInput('');
     setVaultPwInput2('');
   }
 
-  // 保管庫: 手動ロック
+  // 保管庫: 手動ロック（通常一覧へ戻す）
   async function handleVaultLock() {
     await window.electronAPI.vaultLock();
     setVaultUnlocked(false);
+    setPrivateMode(false);
     // private ノートを開いていたら閉じてプレビューをクリア
     if (selectedNote && selectedNote.name.startsWith('private/')) {
       setContent('');
@@ -1410,6 +1417,7 @@ export default function App() {
     });
     const unsubVault = window.electronAPI.onVaultLocked(() => {
       setVaultUnlocked(false);
+      setPrivateMode(false);
     });
     return () => { unsubscribe(); unsubVault(); };
   }, []);
@@ -1911,6 +1919,12 @@ export default function App() {
                     </ul>
                   )}
                 </div>
+                {privateMode && (
+                  <div className="mb-2 flex items-center justify-between rounded bg-emerald-900/30 px-2 py-1.5 text-xs text-emerald-300">
+                    <span>🔑 プライベート保管庫を表示中</span>
+                    <button onClick={handleVaultLock} className="rounded bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold hover:bg-emerald-500/30">ロックして戻る</button>
+                  </div>
+                )}
                 <div className="flex items-center justify-between border-b border-white/5 pb-2 text-xs text-gray-400 px-1">
                   <span className="text-gray-500">{filteredNotes.length}<span className="text-gray-600">/{notes.length}件</span></span>
                   <select

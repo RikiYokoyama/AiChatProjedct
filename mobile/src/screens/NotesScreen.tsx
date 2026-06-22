@@ -24,6 +24,7 @@ export default function FilesScreen({
   onShare,
   onToggleFavorite,
   vaultUnlocked,
+  privateMode,
   onVaultClick,
 }: {
   notes: Note[];
@@ -41,6 +42,7 @@ export default function FilesScreen({
   onToggleFavorite: (note: Note) => void;
   onCreateMoc: (title: string, useAi?: boolean) => void;
   vaultUnlocked: boolean;
+  privateMode: boolean;
   onVaultClick: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -116,6 +118,12 @@ export default function FilesScreen({
 
   return (
     <div className="relative flex h-full flex-col bg-[#070a13]">
+      {privateMode && (
+        <div className="mx-4 mt-3 flex items-center justify-between rounded-lg bg-emerald-900/30 px-3 py-2 text-xs text-emerald-300">
+          <span>🔑 プライベート保管庫を表示中</span>
+          <button onClick={onVaultClick} className="rounded bg-emerald-500/20 px-2 py-1 text-[11px] font-semibold active:bg-emerald-500/30">ロックして戻る</button>
+        </div>
+      )}
       {/* 検索バー */}
       <div className="shrink-0 space-y-2 px-4 pb-2 pt-3">
         <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5">

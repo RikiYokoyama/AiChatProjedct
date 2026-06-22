@@ -81,6 +81,7 @@ export default function App() {
   const [vaultPw2, setVaultPw2] = useState('');
   const [vaultError, setVaultError] = useState('');
   const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
+  const [privateMode, setPrivateMode] = useState(false);
 
   const [recentNames, setRecentNames] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -316,11 +317,13 @@ export default function App() {
       const ok = await unlockVaultFromGitHub(cfg.gitRemoteUrl, vaultPw);
       if (!ok) { setVaultError('パスワードが違います'); return; }
       setVaultUnlocked(true);
+      setPrivateMode(true);
       setVaultModal(null);
       setVaultPw('');
       const pending = pendingPrivateNote;
       setPendingPrivateNote(null);
       if (pending) selectNoteForNoteTab(pending);
+      else setTab('files');
     } catch (e) {
       setVaultError('解除に失敗しました: ' + (e instanceof Error ? e.message : String(e)));
     }
@@ -336,6 +339,7 @@ export default function App() {
       await setupVaultOnGitHub(cfg.gitRemoteUrl, vaultPw);
       setVaultExists(true);
       setVaultUnlocked(true);
+      setPrivateMode(true);
       setVaultModal(null);
       setVaultPw(''); setVaultPw2('');
     } catch (e) {
@@ -346,6 +350,7 @@ export default function App() {
   function handleVaultLock() {
     setVaultPassword(null);
     setVaultUnlocked(false);
+    setPrivateMode(false);
     if (noteTabSelectedName && noteTabSelectedName.startsWith('private')) {
       setNoteTabContent('');
       setNoteTabSelectedName(null);
@@ -359,10 +364,13 @@ export default function App() {
     else handleVaultLock();
   }
 
-  // private/ 配下はロック解除中のみ一覧に表示
-  const visibleNotes = useMemo(
-    () => notes.filter((n) => vaultUnlocked || !(n.remotePath || n.name).startsWith('private/')),
-    [notes, vaultUnlocked],
+  const isPrivateNote = (n: Note) => (n.remotePath || n.name).startsWith('private/');
+  // グラフは常にprivate除外
+  const visibleNotes = useMemo(() => notes.filter((n) => !isPrivateNote(n)), [notes]);
+  // ファイル一覧: privateMode=trueならprivate専用、それ以外は通常（private除外）
+  const filesNotes = useMemo(
+    () => notes.filter((n) => (privateMode ? isPrivateNote(n) : !isPrivateNote(n))),
+    [notes, privateMode],
   );
 
   // ---------- ファイル作成 ----------
@@ -961,13 +969,14 @@ export default function App() {
         {/* ファイルタブ */}
         {tab === 'files' && (
           <FilesScreen
-            notes={visibleNotes}
+            notes={filesNotes}
             recentNames={recentNames}
             favorites={favorites}
             archived={archived}
             selectedName={noteTabSelectedName}
             chatModes={chatModes}
             vaultUnlocked={vaultUnlocked}
+            privateMode={privateMode}
             onVaultClick={handleVaultKeyClick}
             onOpen={(note) => { selectNoteForNoteTab(note); setTab('note'); }}
             onCreate={createNote}
