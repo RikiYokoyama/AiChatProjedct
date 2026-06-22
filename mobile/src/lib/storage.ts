@@ -78,6 +78,18 @@ export async function saveNoteMeta(meta: NoteMeta): Promise<void> {
   await Preferences.set({ key: 'note-meta', value: JSON.stringify(meta) });
 }
 
+// ---------- privateノート表示名マップ（ローカル永続化） ----------
+
+export async function loadPrivateNameMap(): Promise<Record<string, string>> {
+  const { value } = await Preferences.get({ key: 'private-name-map' });
+  if (!value) return {};
+  try { return JSON.parse(value); } catch { return {}; }
+}
+
+export async function savePrivateNameMap(names: Record<string, string>): Promise<void> {
+  await Preferences.set({ key: 'private-name-map', value: JSON.stringify(names) });
+}
+
 // ---------- ノート本体 ----------
 
 async function ensureNotesDir() {

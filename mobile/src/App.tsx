@@ -16,6 +16,8 @@ import {
   saveNoteMeta,
   loadMasterTags,
   saveMasterTagsLocal,
+  loadPrivateNameMap,
+  savePrivateNameMap,
 } from './lib/storage';
 import {
   Note,
@@ -119,6 +121,9 @@ export default function App() {
   const notesRef = useRef<Note[]>(notes);
   notesRef.current = notes;
 
+  // privateノート表示名マップ（ローカル永続化 + stale closure対策）
+  const privateNameMapRef = useRef<Record<string, string>>({});
+
   // 自動sync間隔（5分）
   const lastAutoSyncRef = useRef<number>(0);
   const MIN_AUTO_SYNC_MS = 5 * 60 * 1000;
@@ -136,6 +141,10 @@ export default function App() {
       // マスタータグをキャッシュから読み込み
       const cachedTags = await loadMasterTags();
       setMasterTags(cachedTags);
+
+      // privateノート表示名マップをローカルから読み込み
+      const savedNameMap = await loadPrivateNameMap();
+      privateNameMapRef.current = savedNameMap;
 
       if (cfg.gitRemoteUrl) {
         // ① キャッシュがあれば即座に表示（0秒）
@@ -178,16 +187,18 @@ export default function App() {
   const mergeRemoteNotes = useCallback((remoteList: { name: string; remotePath: string; sha: string; updatedAt: string }[]) => {
     setNotes(prev => {
       const prevMap = new Map(prev.map(n => [n.name, n]));
+      const nameMap = privateNameMapRef.current;
       return remoteList.map(r => {
         const existing = prevMap.get(r.name);
+        // ローカル永続化 or 既存 state から displayName を解決
+        const localName = nameMap[r.name];
         return {
           ...buildNote(r.name, existing?.content ?? '', r.updatedAt),
           remotePath: r.remotePath,
-          // 既存の sha・displayName を優先（fetch済みの値を保持）
           sha: existing?.sha || r.sha,
           favorite: existing?.favorite,
           archived: existing?.archived,
-          displayName: existing?.displayName,
+          displayName: existing?.displayName ?? (localName ? localName.replace(/\.md$/i, '') : undefined),
         } as Note;
       });
     });
@@ -349,10 +360,12 @@ export default function App() {
       );
     }
 
-    // Step5: notes state に displayName を反映
+    // Step5: ローカルに永続化 + notes state に displayName を反映
     if (Object.keys(updatedNames).length === 0) return;
+    privateNameMapRef.current = { ...privateNameMapRef.current, ...updatedNames };
+    savePrivateNameMap(privateNameMapRef.current).catch(() => {});
     setNotes(prev => prev.map(n => {
-      const rn = (n.remotePath ?? '').split('/').pop() ?? '';
+      const rn = n.name; // mergeRemoteNotes のキーは n.name
       const title = updatedNames[rn];
       if (!title) return n;
       return { ...n, displayName: title.replace(/\.md$/i, '') };
@@ -480,13 +493,18 @@ export default function App() {
     const newNote: Note = isPrivate
       ? { ...buildNote(name, initial), name: privateTimestampName, remotePath, sha: newSha, displayName: noteTitle(name) }
       : { ...buildNote(name, initial), remotePath, sha: newSha };
-    // private: _names.enc にファイル名→表示名を登録
-    if (config.gitRemoteUrl && isPrivate) {
-      const url = config.gitRemoteUrl;
-      loadPrivateNamesFromGitHub(url).then(existing => {
-        const updated = { ...existing, [privateTimestampName]: noteTitle(name) };
-        return savePrivateNamesToGitHub(url, updated);
-      }).catch(console.error);
+    // private: ローカルマップと _names.enc にファイル名→表示名を登録
+    if (isPrivate) {
+      const displayTitle = noteTitle(name);
+      privateNameMapRef.current = { ...privateNameMapRef.current, [privateTimestampName]: displayTitle };
+      savePrivateNameMap(privateNameMapRef.current).catch(() => {});
+      if (config.gitRemoteUrl) {
+        const url = config.gitRemoteUrl;
+        loadPrivateNamesFromGitHub(url).then(existing => {
+          const updated = { ...existing, [privateTimestampName]: displayTitle };
+          return savePrivateNamesToGitHub(url, updated);
+        }).catch(console.error);
+      }
     }
     // _index.json と moc/moc.md を非同期で更新（private は公開MOCに載せない）
     if (config.gitRemoteUrl && !isPrivate) {
