@@ -690,11 +690,26 @@ export default function App() {
   }
 
   async function deleteNoteAction(note: Note) {
-    if (!window.confirm(`「${noteTitle(note.name)}」を削除しますか？`)) return;
+    if (!window.confirm(`「${note.displayName ?? noteTitle(note.name)}」を削除しますか？`)) return;
     if (config.gitRemoteUrl && note.remotePath && note.sha) {
       await deleteNoteOnGitHub(config.gitRemoteUrl, note.remotePath, note.sha);
     } else {
       await removeNote(note.name);
+    }
+    // private タイムスタンプノートの場合、_names.enc とローカルマップから削除
+    if (/^\d{13,}\.md$/.test(note.name)) {
+      const newMap = { ...privateNameMapRef.current };
+      delete newMap[note.name];
+      privateNameMapRef.current = newMap;
+      savePrivateNameMap(newMap).catch(() => {});
+      if (config.gitRemoteUrl) {
+        const url = config.gitRemoteUrl;
+        loadPrivateNamesFromGitHub(url).then(existing => {
+          const updated = { ...existing };
+          delete updated[note.name];
+          return savePrivateNamesToGitHub(url, updated);
+        }).catch(() => {});
+      }
     }
     if (noteTabSelectedName === note.name) {
       setNoteTabSelectedName(null);
@@ -800,16 +815,38 @@ export default function App() {
 
     if (action === 'title') {
       // 現在のタイトルと本文をAIに渡してより適切なタイトルを生成
-      const currentTitle = targetNote ? noteTitle(targetNote.name) : '';
+      const oldNote = notes.find(n => n.name === targetName);
+      const currentTitle = oldNote?.displayName ?? (targetNote ? noteTitle(targetNote.name) : '');
       const newTitle = await generateNoteTitle(config.geminiApiKey, currentTitle, body.slice(0, 600));
       if (!newTitle || newTitle === currentTitle) return;
-      // 重複時は番号を付けて回避
+
+      // privateタイムスタンプノートはファイル名を変えずdisplayNameのみ更新
+      if (oldNote && /^\d{13,}\.md$/.test(oldNote.name)) {
+        const newBody = body.replace(/^#[^\n]*/, `# ${newTitle}`);
+        if (config.gitRemoteUrl && oldNote.remotePath) {
+          await saveNoteToGitHub(config.gitRemoteUrl, oldNote.remotePath, newBody);
+        }
+        privateNameMapRef.current = { ...privateNameMapRef.current, [oldNote.name]: newTitle };
+        savePrivateNameMap(privateNameMapRef.current).catch(() => {});
+        if (config.gitRemoteUrl) {
+          const url = config.gitRemoteUrl;
+          loadPrivateNamesFromGitHub(url).then(existing =>
+            savePrivateNamesToGitHub(url, { ...existing, [oldNote.name]: newTitle })
+          ).catch(() => {});
+        }
+        setNotes(prev => prev.map(n =>
+          n.name === oldNote.name ? { ...n, displayName: newTitle, content: newBody } : n
+        ));
+        setNoteTabContent(newBody);
+        return;
+      }
+
+      // 通常ノートはファイルをリネーム
       let newName = cleanFilename(newTitle);
       let counter = 1;
       while (notes.some((n) => n.name.toLowerCase() === newName.toLowerCase() && n.name !== targetName)) {
         newName = cleanFilename(`${newTitle} (${counter++})`);
       }
-      const oldNote = notes.find(n => n.name === targetName);
       if (config.gitRemoteUrl && oldNote?.remotePath) {
         const newRemotePath = oldNote.remotePath.replace(/[^/]+$/, newName);
         await saveNoteToGitHub(config.gitRemoteUrl, newRemotePath, body);
