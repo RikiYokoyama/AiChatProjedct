@@ -55,8 +55,7 @@ import {
   vaultExistsOnGitHub,
   setupVaultOnGitHub,
   unlockVaultFromGitHub,
-  loadPrivateNamesFromGitHub,
-  savePrivateNamesToGitHub,
+
 } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
@@ -323,62 +322,45 @@ export default function App() {
   }, []);
 
   // ---------- 保管庫 ----------
-  // vault 解除後に private ノートの displayName を解決して _names.enc を更新する
+  // vault 解除後に private タイムスタンプノートの displayName をローカルに解決・保存する
+  // _names.enc (GitHub) は使わず、デバイスローカル (Capacitor Preferences) のみに保存
   async function applyPrivateDisplayNames(url: string) {
-    // Step1: GitHub から private/ 以下のノートリストを直接取得
-    const remoteList = await fetchNoteListFromGitHub(url).catch((e) => { console.error('[DBG] fetchList失敗:', e); return []; });
-    const tsNotes = remoteList.filter(r => {
-      const rn = (r.remotePath ?? r.name).split('/').pop() ?? '';
-      return (r.remotePath ?? '').startsWith('private/') && /^\d{13,}\.md$/.test(rn);
-    });
+    // Step1: ローカルキャッシュに未登録のタイムスタンプノートを特定
+    const remoteList = await fetchNoteListFromGitHub(url).catch(() => []);
+    const tsNotes = remoteList.filter(r =>
+      (r.remotePath ?? '').startsWith('private/') &&
+      /^\d{13,}\.md$/.test(r.name)
+    );
+    if (tsNotes.length === 0) return;
 
-    // Step2: 既存の _names.enc を読み込む
-    let existingNames: Record<string, string> = {};
-    try {
-      existingNames = await loadPrivateNamesFromGitHub(url);
-    } catch (e) {
-      console.error('[DBG] _names.enc 読み込み失敗:', e);
-      alert('[DBG] _names.enc 復号失敗: ' + String(e));
+    const localMap = { ...privateNameMapRef.current };
+    const missing = tsNotes.filter(r => !localMap[r.name]);
+    if (missing.length === 0) {
+      // ローカルに全件ある → state だけ更新
+      setNotes(prev => prev.map(n => {
+        const title = localMap[n.name];
+        return title ? { ...n, displayName: title } : n;
+      }));
+      return;
     }
-    const updatedNames = { ...existingNames };
-    let changed = false;
 
-    // デバッグ: 状況を表示
-    alert(`[DBG] tsNotes:${tsNotes.map(r=>r.name).join(',')} | existing keys:${Object.keys(existingNames).join(',')}`);
-
-    // Step3: 未登録のノートを復号してタイトル取得
-    for (const r of tsNotes) {
-      const rn = (r.remotePath ?? r.name).split('/').pop()!;
-      if (existingNames[rn]) continue; // 登録済みはスキップ
+    // Step2: 未登録ノートを復号してタイトル取得（復号はバルト解除済みなので可能）
+    for (const r of missing) {
       try {
-        const { content } = await fetchNoteContentFromGitHub(url, r.remotePath ?? r.name);
+        const { content } = await fetchNoteContentFromGitHub(url, r.remotePath);
         const title = content.split('\n')[0].replace(/^#+\s*/, '').trim();
-        if (title) {
-          updatedNames[rn] = title;
-          changed = true;
-        }
+        if (title) localMap[r.name] = title;
       } catch (e) {
-        console.error('displayName取得失敗:', rn, e);
-        alert('[DBG] ノート復号失敗 ' + rn + ': ' + String(e));
+        console.error('displayName取得失敗:', r.name, e);
       }
     }
 
-    // Step4: 変更があれば _names.enc を保存
-    if (changed) {
-      await savePrivateNamesToGitHub(url, updatedNames).catch(e =>
-        console.error('_names.enc 保存失敗:', e)
-      );
-    }
-
-    // Step5: ローカルに永続化 + notes state に displayName を反映
-    if (Object.keys(updatedNames).length === 0) return;
-    privateNameMapRef.current = { ...privateNameMapRef.current, ...updatedNames };
-    savePrivateNameMap(privateNameMapRef.current).catch(() => {});
+    // Step3: ローカルに保存 + state 反映
+    privateNameMapRef.current = localMap;
+    savePrivateNameMap(localMap).catch(() => {});
     setNotes(prev => prev.map(n => {
-      const rn = n.name; // mergeRemoteNotes のキーは n.name
-      const title = updatedNames[rn];
-      if (!title) return n;
-      return { ...n, displayName: title.replace(/\.md$/i, '') };
+      const title = localMap[n.name];
+      return title ? { ...n, displayName: title } : n;
     }));
   }
 
@@ -503,18 +485,11 @@ export default function App() {
     const newNote: Note = isPrivate
       ? { ...buildNote(name, initial), name: privateTimestampName, remotePath, sha: newSha, displayName: noteTitle(name) }
       : { ...buildNote(name, initial), remotePath, sha: newSha };
-    // private: ローカルマップと _names.enc にファイル名→表示名を登録
+    // private: ローカルマップにファイル名→表示名を登録（ローカルのみ保存）
     if (isPrivate) {
       const displayTitle = noteTitle(name);
       privateNameMapRef.current = { ...privateNameMapRef.current, [privateTimestampName]: displayTitle };
       savePrivateNameMap(privateNameMapRef.current).catch(() => {});
-      if (config.gitRemoteUrl) {
-        const url = config.gitRemoteUrl;
-        loadPrivateNamesFromGitHub(url).then(existing => {
-          const updated = { ...existing, [privateTimestampName]: displayTitle };
-          return savePrivateNamesToGitHub(url, updated);
-        }).catch(console.error);
-      }
     }
     // _index.json と moc/moc.md を非同期で更新（private は公開MOCに載せない）
     if (config.gitRemoteUrl && !isPrivate) {
@@ -706,20 +681,12 @@ export default function App() {
     } else {
       await removeNote(note.name);
     }
-    // private タイムスタンプノートの場合、_names.enc とローカルマップから削除
+    // private タイムスタンプノートの場合、ローカルマップからも削除
     if (/^\d{13,}\.md$/.test(note.name)) {
       const newMap = { ...privateNameMapRef.current };
       delete newMap[note.name];
       privateNameMapRef.current = newMap;
       savePrivateNameMap(newMap).catch(() => {});
-      if (config.gitRemoteUrl) {
-        const url = config.gitRemoteUrl;
-        loadPrivateNamesFromGitHub(url).then(existing => {
-          const updated = { ...existing };
-          delete updated[note.name];
-          return savePrivateNamesToGitHub(url, updated);
-        }).catch(() => {});
-      }
     }
     if (noteTabSelectedName === note.name) {
       setNoteTabSelectedName(null);
@@ -838,12 +805,6 @@ export default function App() {
         }
         privateNameMapRef.current = { ...privateNameMapRef.current, [oldNote.name]: newTitle };
         savePrivateNameMap(privateNameMapRef.current).catch(() => {});
-        if (config.gitRemoteUrl) {
-          const url = config.gitRemoteUrl;
-          loadPrivateNamesFromGitHub(url).then(existing =>
-            savePrivateNamesToGitHub(url, { ...existing, [oldNote.name]: newTitle })
-          ).catch(() => {});
-        }
         setNotes(prev => prev.map(n =>
           n.name === oldNote.name ? { ...n, displayName: newTitle, content: newBody } : n
         ));
