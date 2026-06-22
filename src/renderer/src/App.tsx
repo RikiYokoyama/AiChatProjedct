@@ -275,7 +275,6 @@ export default function App() {
   const [vaultPwInput2, setVaultPwInput2] = useState('');
   const [vaultError, setVaultError] = useState('');
   const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
-  const [newNoteIsPrivate, setNewNoteIsPrivate] = useState(false);
   const [privateMode, setPrivateMode] = useState(false); // true=プライベート専用一覧を表示
   const [showMocModal, setShowMocModal] = useState(false);
   const [mocTitle, setMocTitle] = useState('');
@@ -791,7 +790,8 @@ export default function App() {
     const now = new Date();
     const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
-    const result = await window.electronAPI.saveNote({ filename: name, content: initial });
+    const filename = privateMode ? `private/${name}` : name;
+    const result = await window.electronAPI.saveNote({ filename, content: initial });
     if (!result.success) {
       alert(result.error ?? 'ノートを作成できませんでした');
       return;
@@ -865,12 +865,8 @@ export default function App() {
     const now = new Date();
     const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
-    // プライベート指定なら private/ 配下に作成（暗号化される）
-    const filename = newNoteIsPrivate ? `private/${name}` : name;
-    if (newNoteIsPrivate && !vaultUnlocked) {
-      alert('保管庫がロックされています。先にロックを解除してください。');
-      return;
-    }
+    // プライベート保管庫を開いている間に作成 → private/ 配下に暗号化保存
+    const filename = privateMode ? `private/${name}` : name;
     const result = await window.electronAPI.saveNote({ filename, content: initial });
     if (!result.success) {
       alert(result.error ?? 'ノートを作成できませんでした');
@@ -878,7 +874,6 @@ export default function App() {
     }
     setShowNewNoteModal(false);
     setNewNoteName('Untitled');
-    setNewNoteIsPrivate(false);
     await loadNotesList();
     const savedName = result.name ?? name;
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
@@ -2575,16 +2570,10 @@ export default function App() {
               />
             </label>
 
-            {vaultExists && (
-              <label className="mb-5 flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="rounded"
-                  checked={newNoteIsPrivate}
-                  onChange={(e) => setNewNoteIsPrivate(e.target.checked)}
-                />
-                <span>🔒 プライベート（暗号化して保管庫に保存）</span>
-              </label>
+            {privateMode && (
+              <p className="mb-5 rounded bg-emerald-900/30 px-3 py-2 text-xs text-emerald-300">
+                🔑 プライベート保管庫に暗号化して保存されます
+              </p>
             )}
 
             {isAiNoteMode && (
