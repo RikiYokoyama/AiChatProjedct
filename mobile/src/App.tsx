@@ -312,44 +312,51 @@ export default function App() {
   }, []);
 
   // ---------- 保管庫 ----------
+  // vault 解除後に private ノートの displayName を解決して _names.enc を更新する
   async function applyPrivateDisplayNames(url: string) {
-    const names = await loadPrivateNamesFromGitHub(url).catch(() => ({} as Record<string, string>));
-
-    // Step1: _names.enc に登録済みのノートは即座に displayName を設定
-    setNotes(prev => prev.map(n => {
-      const remoteName = (n.remotePath ?? '').split('/').pop() ?? '';
-      const rawDisplayName = names[remoteName];
-      if (!rawDisplayName) return n;
-      return { ...n, displayName: rawDisplayName.replace(/\.md$/i, '') };
-    }));
-
-    // Step2: _names.enc に未登録のタイムスタンプIDノートはコンテンツを復号して取得（フォールバック）
-    const missingNotes = notesRef.current.filter(n => {
-      const rp = n.remotePath ?? '';
-      if (!rp.startsWith('private/')) return false;
-      const rn = rp.split('/').pop() ?? '';
-      return /^\d{13,}\.md$/.test(rn) && !names[rn] && !n.displayName;
+    // Step1: GitHub から private/ 以下のノートリストを直接取得
+    const remoteList = await fetchNoteListFromGitHub(url).catch(() => []);
+    const tsNotes = remoteList.filter(r => {
+      const rn = (r.remotePath ?? r.name).split('/').pop() ?? '';
+      return (r.remotePath ?? '').startsWith('private/') && /^\d{13,}\.md$/.test(rn);
     });
-    if (missingNotes.length === 0) return;
 
-    const updatedNames = { ...names };
-    for (const note of missingNotes) {
+    // Step2: 既存の _names.enc を読み込む
+    const existingNames = await loadPrivateNamesFromGitHub(url).catch(() => ({} as Record<string, string>));
+    const updatedNames = { ...existingNames };
+    let changed = false;
+
+    // Step3: 未登録のノートを復号してタイトル取得
+    for (const r of tsNotes) {
+      const rn = (r.remotePath ?? r.name).split('/').pop()!;
+      if (existingNames[rn]) continue; // 登録済みはスキップ
       try {
-        const rn = (note.remotePath ?? '').split('/').pop() ?? '';
-        // fetchNoteContentFromGitHub は vault 解除中に自動復号する
-        const { content } = await fetchNoteContentFromGitHub(url, note.remotePath!);
+        const { content } = await fetchNoteContentFromGitHub(url, r.remotePath ?? r.name);
         const title = content.split('\n')[0].replace(/^#+\s*/, '').trim();
         if (title) {
-          setNotes(prev => prev.map(n => n.name === note.name ? { ...n, displayName: title } : n));
           updatedNames[rn] = title;
+          changed = true;
         }
-      } catch { /* 取得失敗は無視 */ }
+      } catch (e) {
+        console.error('displayName取得失敗:', rn, e);
+      }
     }
 
-    // Step3: 新しく判明した名前を _names.enc に保存（次回以降は高速化）
-    if (Object.keys(updatedNames).length > Object.keys(names).length) {
-      savePrivateNamesToGitHub(url, updatedNames).catch(console.error);
+    // Step4: 変更があれば _names.enc を保存
+    if (changed) {
+      await savePrivateNamesToGitHub(url, updatedNames).catch(e =>
+        console.error('_names.enc 保存失敗:', e)
+      );
     }
+
+    // Step5: notes state に displayName を反映
+    if (Object.keys(updatedNames).length === 0) return;
+    setNotes(prev => prev.map(n => {
+      const rn = (n.remotePath ?? '').split('/').pop() ?? '';
+      const title = updatedNames[rn];
+      if (!title) return n;
+      return { ...n, displayName: title.replace(/\.md$/i, '') };
+    }));
   }
 
   async function handleVaultUnlock() {
