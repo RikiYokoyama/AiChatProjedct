@@ -314,15 +314,42 @@ export default function App() {
   // ---------- 保管庫 ----------
   async function applyPrivateDisplayNames(url: string) {
     const names = await loadPrivateNamesFromGitHub(url).catch(() => ({} as Record<string, string>));
-    if (Object.keys(names).length === 0) return;
+
+    // Step1: _names.enc に登録済みのノートは即座に displayName を設定
     setNotes(prev => prev.map(n => {
       const remoteName = (n.remotePath ?? '').split('/').pop() ?? '';
       const rawDisplayName = names[remoteName];
       if (!rawDisplayName) return n;
-      // 拡張子を除いたタイトルに正規化
-      const displayName = rawDisplayName.replace(/\.md$/i, '');
-      return { ...n, displayName };
+      return { ...n, displayName: rawDisplayName.replace(/\.md$/i, '') };
     }));
+
+    // Step2: _names.enc に未登録のタイムスタンプIDノートはコンテンツを復号して取得（フォールバック）
+    const missingNotes = notesRef.current.filter(n => {
+      const rp = n.remotePath ?? '';
+      if (!rp.startsWith('private/')) return false;
+      const rn = rp.split('/').pop() ?? '';
+      return /^\d{13,}\.md$/.test(rn) && !names[rn] && !n.displayName;
+    });
+    if (missingNotes.length === 0) return;
+
+    const updatedNames = { ...names };
+    for (const note of missingNotes) {
+      try {
+        const rn = (note.remotePath ?? '').split('/').pop() ?? '';
+        // fetchNoteContentFromGitHub は vault 解除中に自動復号する
+        const { content } = await fetchNoteContentFromGitHub(url, note.remotePath!);
+        const title = content.split('\n')[0].replace(/^#+\s*/, '').trim();
+        if (title) {
+          setNotes(prev => prev.map(n => n.name === note.name ? { ...n, displayName: title } : n));
+          updatedNames[rn] = title;
+        }
+      } catch { /* 取得失敗は無視 */ }
+    }
+
+    // Step3: 新しく判明した名前を _names.enc に保存（次回以降は高速化）
+    if (Object.keys(updatedNames).length > Object.keys(names).length) {
+      savePrivateNamesToGitHub(url, updatedNames).catch(console.error);
+    }
   }
 
   async function handleVaultUnlock() {
