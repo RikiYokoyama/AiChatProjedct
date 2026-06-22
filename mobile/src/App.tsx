@@ -364,6 +364,18 @@ export default function App() {
     else handleVaultLock();
   }
 
+  // 検索欄に保管庫パスワードを入力 → 一致したら一発で解除（合言葉＝パスワード方式）
+  async function trySecretUnlock(query: string): Promise<boolean> {
+    if (!vaultExists || vaultUnlocked || !query.trim()) return false;
+    const cfg = configRef.current;
+    if (!cfg.gitRemoteUrl) return false;
+    try {
+      const ok = await unlockVaultFromGitHub(cfg.gitRemoteUrl, query);
+      if (ok) { setVaultUnlocked(true); setPrivateMode(true); return true; }
+    } catch { /* 失敗時は通常検索として扱う */ }
+    return false;
+  }
+
   const isPrivateNote = (n: Note) => (n.remotePath || n.name).startsWith('private/');
   // グラフは常にprivate除外
   const visibleNotes = useMemo(() => notes.filter((n) => !isPrivateNote(n)), [notes]);
@@ -975,9 +987,9 @@ export default function App() {
             archived={archived}
             selectedName={noteTabSelectedName}
             chatModes={chatModes}
-            vaultUnlocked={vaultUnlocked}
             privateMode={privateMode}
             onVaultClick={handleVaultKeyClick}
+            onSecretUnlock={trySecretUnlock}
             onOpen={(note) => { selectNoteForNoteTab(note); setTab('note'); }}
             onCreate={createNote}
             onCreateMemo={createMemo}

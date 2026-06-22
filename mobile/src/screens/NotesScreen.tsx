@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Archive, FileText, KeyRound, Lock, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
+import { Archive, FileText, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
 import { Note, isEmptyNote, noteTitle } from '../lib/notes';
 import SwipeableNoteRow from '../components/SwipeableNoteRow';
 import Fab from '../components/Fab';
@@ -23,9 +23,9 @@ export default function FilesScreen({
   onArchive,
   onShare,
   onToggleFavorite,
-  vaultUnlocked,
   privateMode,
   onVaultClick,
+  onSecretUnlock,
 }: {
   notes: Note[];
   recentNames: string[];
@@ -41,9 +41,9 @@ export default function FilesScreen({
   onShare: (note: Note) => void;
   onToggleFavorite: (note: Note) => void;
   onCreateMoc: (title: string, useAi?: boolean) => void;
-  vaultUnlocked: boolean;
   privateMode: boolean;
   onVaultClick: () => void;
+  onSecretUnlock: (query: string) => Promise<boolean>;
 }) {
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -132,6 +132,12 @@ export default function FilesScreen({
             className="w-full bg-transparent text-sm outline-none placeholder:text-gray-600"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === 'Enter' && query.trim()) {
+                const ok = await onSecretUnlock(query.trim());
+                if (ok) setQuery('');
+              }
+            }}
             placeholder="ファイル・タグを検索"
           />
           {query && (
@@ -165,16 +171,6 @@ export default function FilesScreen({
           >
             <Archive className="h-3 w-3" />
             {showArchived ? 'アーカイブ中' : 'アーカイブ'}
-          </button>
-          <button
-            onClick={onVaultClick}
-            className={`ml-auto flex items-center gap-1.5 rounded-full px-3 py-1 text-xs ${
-              vaultUnlocked ? 'bg-emerald-500/30 text-emerald-300' : 'bg-white/5 text-gray-400'
-            }`}
-            title="プライベート保管庫"
-          >
-            {vaultUnlocked ? <KeyRound className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
-            {vaultUnlocked ? '解除中' : '保管庫'}
           </button>
         </div>
         {/* 並べ替え + ファイル数 */}
