@@ -520,11 +520,11 @@ export default function App() {
       const val = query.substring(5).trim().toLowerCase();
       return notes
         .filter((n) => n.name.toLowerCase().includes(val))
-        .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name}` }));
+        .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     } else {
       return notes
         .filter((n) => n.name.toLowerCase().includes(queryLower))
-        .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name}` }));
+        .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     }
   }, [notes, searchQuery, allTagsMap]);
 
