@@ -75,79 +75,35 @@ function getFilesRecursively(dir, filterExt = '.md') {
   return results;
 }
 
-// YYYY-MM 形式のフォルダ名かチェック
-function isYearMonthDir(name) {
-  return /^\d{4}-\d{2}$/.test(name);
-}
-
-// コミット前にルートの .md を YYYY-MM/ へ移動
-function packMarkdownFiles(notesPath) {
+// ルート直下に取り残された .md を作成日時の notes/YYYY-MM/ へ移動（救済用）
+function migrateRootMdFiles(notesPath) {
   const files = fs.readdirSync(notesPath, { withFileTypes: true });
-  const mdFiles = files.filter(f => f.isFile() && f.name.endsWith('.md'));
+  const mdFiles = files.filter(f => f.isFile() && f.name.endsWith('.md') && !f.name.startsWith('_'));
   if (mdFiles.length === 0) return;
-
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const monthDir = path.join(notesPath, `${year}-${month}`);
-
-  if (!fs.existsSync(monthDir)) {
-    fs.mkdirSync(monthDir, { recursive: true });
-  }
 
   for (const file of mdFiles) {
     const srcPath = path.join(notesPath, file.name);
-    const destPath = path.join(monthDir, file.name);
-    fs.renameSync(srcPath, destPath);
-    console.log(`Packed: ${srcPath} -> ${destPath}`);
-  }
-}
-
-// ローカルの YYYY-MM/ フォルダと backup/ を削除してルートだけに保つ
-function cleanLocalArchive(notesPath) {
-  const backupDir = path.join(notesPath, 'backup');
-  if (fs.existsSync(backupDir)) {
-    fs.rmSync(backupDir, { recursive: true, force: true });
-    console.log('Removed local backup/');
-  }
-  const entries = fs.readdirSync(notesPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && isYearMonthDir(entry.name)) {
-      const dirPath = path.join(notesPath, entry.name);
-      fs.rmSync(dirPath, { recursive: true, force: true });
-      console.log(`Removed local ${entry.name}/`);
+    let ym;
+    try {
+      const content = fs.readFileSync(srcPath, 'utf8');
+      ym = extractCreatedAt(content)
+        ? yearMonthFromContent(content)
+        : (() => { const d = fs.statSync(srcPath).mtime; return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+    } catch {
+      ym = yearMonthFromContent('');
     }
-  }
-}
-
-// 同期後に YYYY-MM/ の最新ファイルをルートに展開し、YYYY-MM/ と backup/ を削除
-function unpackMarkdownFiles(notesPath) {
-  const entries = fs.readdirSync(notesPath, { withFileTypes: true });
-  const monthDirs = entries
-    .filter(e => e.isDirectory() && isYearMonthDir(e.name))
-    .map(e => e.name)
-    .sort();
-
-  if (monthDirs.length === 0) return;
-
-  // 同名ファイルが複数フォルダにある場合、最新月（フォルダ名が大きい方）を優先
-  const latestMap = new Map();
-  for (const monthName of monthDirs) {
-    const monthPath = path.join(notesPath, monthName);
-    const mdFiles = getFilesRecursively(monthPath, '.md');
-    for (const srcPath of mdFiles) {
-      const filename = path.basename(srcPath);
-      latestMap.set(filename, srcPath);
+    const destDir = path.join(notesPath, 'notes', ym);
+    fs.mkdirSync(destDir, { recursive: true });
+    const destPath = path.join(destDir, file.name);
+    if (fs.existsSync(destPath)) {
+      // 同名が既にあれば上書き（最新優先）
+      fs.copyFileSync(srcPath, destPath);
+      fs.unlinkSync(srcPath);
+    } else {
+      fs.renameSync(srcPath, destPath);
     }
+    console.log(`Migrated: ${srcPath} -> ${destPath}`);
   }
-
-  for (const [filename, srcPath] of latestMap) {
-    const destPath = path.join(notesPath, filename);
-    fs.copyFileSync(srcPath, destPath);
-    console.log(`Unpacked: ${srcPath} -> ${destPath}`);
-  }
-
-  cleanLocalArchive(notesPath);
 }
 
 async function runGitSync() {
@@ -184,8 +140,8 @@ async function runGitSync() {
 
     mainWindow?.webContents.send('git-status-changed', 'syncing');
 
-    // 1. コミット前にルート直下の .md をフォルダ分け (Pack)
-    packMarkdownFiles(notesPath);
+    // 1. ルート直下に取り残された .md を notes/YYYY-MM/ へ移動（救済）
+    migrateRootMdFiles(notesPath);
 
     // 2. Gitにステージ＆コミット
     await git.add('.');
@@ -229,19 +185,10 @@ async function runGitSync() {
       }
     }
 
-    // 4. 同期完了後に archive/ の .md をルート直下へ復元 (Unpack)
-    unpackMarkdownFiles(notesPath);
-
     mainWindow?.webContents.send('git-status-changed', 'success');
     return { success: true };
   } catch (err) {
     console.error('Git sync failed:', err);
-    // 失敗した場合も、念のため手元のファイルを復元しておく
-    try {
-      unpackMarkdownFiles(notesPath);
-    } catch (restoreErr) {
-      console.error('Failed to restore files after git failure:', restoreErr);
-    }
     mainWindow?.webContents.send('git-status-changed', 'error', err.message);
     return { success: false, error: err.message };
   }
@@ -260,7 +207,7 @@ async function autoCommit() {
     const git = simpleGit(notesPath);
     const isRepo = await git.checkIsRepo();
     if (!isRepo) return;
-    packMarkdownFiles(notesPath);
+    migrateRootMdFiles(notesPath);
     await git.add('.');
     const status = await git.status();
     if (status.files.length > 0) {
@@ -268,10 +215,8 @@ async function autoCommit() {
       hasPendingCommit = true;
       console.log('Auto-committed locally');
     }
-    unpackMarkdownFiles(notesPath);
   } catch (err) {
     console.error('Auto-commit failed:', err.message);
-    try { unpackMarkdownFiles(notesPath); } catch {}
   }
 }
 
@@ -489,6 +434,13 @@ function extractCreatedAt(content) {
   const [, y, mo, d, h = '0', min = '0'] = m;
   const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min));
   return isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
+// content の作成日時（なければ現在時刻）から "YYYY-MM" を返す
+function yearMonthFromContent(content) {
+  const iso = extractCreatedAt(content) ?? new Date().toISOString();
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function extractTags(content) {
@@ -724,11 +676,19 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
       fs.mkdirSync(notesPath, { recursive: true });
     }
 
-    const filePath = resolveNotePath(notesPath, filename);
+    let relName = filename.endsWith('.md') ? filename : `${filename}.md`;
+    // パス区切りを含まない = 新規ノート → 作成日時の notes/YYYY-MM/ へ振り分け
+    if (!relName.includes('/') && !relName.includes('\\')) {
+      const ym = yearMonthFromContent(content);
+      relName = `notes/${ym}/${relName}`;
+    }
 
+    const filePath = resolveNotePath(notesPath, relName);
+
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content, 'utf8');
     updateIndex();
-    return { success: true, path: filePath };
+    return { success: true, path: filePath, name: relName };
   } catch (err) {
     console.error('Failed to save note:', err);
     return { success: false, error: err.message };

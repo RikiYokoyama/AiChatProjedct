@@ -407,7 +407,8 @@ export default function App() {
     }
 
     await loadNotesList();
-    const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: initial };
+    const savedName = result.name ?? filename;
+    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
     setEditMode('edit');
   };
@@ -700,7 +701,8 @@ export default function App() {
       return;
     }
     await loadNotesList();
-    const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
+    const savedName = result.name ?? name;
+    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
     setRibbonView('notes');
     setEditMode('edit');
@@ -775,7 +777,8 @@ export default function App() {
     setShowNewNoteModal(false);
     setNewNoteName('Untitled');
     await loadNotesList();
-    const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
+    const savedName = result.name ?? name;
+    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
 
     if (!isAiNoteMode || !config.geminiApiKey) {
@@ -806,7 +809,7 @@ export default function App() {
         const finalContent = `# ${title}\n作成日時: ${formattedDate}\n\n${fullText}`;
         setContent(finalContent);
         setNoteContext(finalContent);
-        await window.electronAPI.saveNote({ filename: name, content: finalContent });
+        await window.electronAPI.saveNote({ filename: savedName, content: finalContent });
         await loadNotesList();
 
         // 初期生成文章からプロンプトブロックを検出して保留登録する
@@ -1044,7 +1047,8 @@ export default function App() {
       return;
     }
     await loadNotesList();
-    const note: Note = { name, path: result.path ?? name, updatedAt: new Date().toISOString(), content: initial };
+    const savedName = result.name ?? name;
+    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
     setEditMode('edit');
   }
@@ -1164,11 +1168,12 @@ export default function App() {
         const fullContent = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${tagsString}\n\n${block}\n`;
         const result = await window.electronAPI.saveNote({ filename, content: fullContent });
         if (result.success) {
-          const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
+          const savedName = result.name ?? filename;
+          const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
           setSelectedNote(note);
           setContent(fullContent);
           setNoteContext(fullContent);
-          setOpenTabs((prev) => (prev.some((t) => t.name === filename) ? prev : [...prev, note]));
+          setOpenTabs((prev) => (prev.some((t) => t.name === savedName) ? prev : [...prev, note]));
 
           // 新規自動保存ノート全体から [PROMPT] をスキャンして保留登録する
           const promptBlockRegexGlobal = /\[PROMPT\]\s*名前\s*[:：]\s*([^\n\r]+)\s*指示\s*[:：]\s*([\s\S]+?)\s*\[\/PROMPT\]/gi;

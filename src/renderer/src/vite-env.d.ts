@@ -31,7 +31,7 @@ interface Window {
       wikiLinks?: string[];
     }>>;
     readNote: (filename: string) => Promise<string>;
-    saveNote: (data: { filename: string; content: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
+    saveNote: (data: { filename: string; content: string }) => Promise<{ success: boolean; path?: string; name?: string; error?: string }>;
     renameNote: (data: { oldFilename: string; newFilename: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
     syncGit: () => Promise<{ success: boolean; error?: string }>;
     openDirectoryDialog: () => Promise<string | null>;
