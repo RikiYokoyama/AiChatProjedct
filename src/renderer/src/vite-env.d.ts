@@ -7,12 +7,14 @@ interface Window {
       notesPath: string;
       gitRemoteUrl: string;
       autoSync: boolean;
+      vaultAutoLockMinutes?: number;
     }>;
     saveConfig: (config: {
       geminiApiKey?: string;
       notesPath?: string;
       gitRemoteUrl?: string;
       autoSync?: boolean;
+      vaultAutoLockMinutes?: number;
     }) => Promise<{ success: boolean; error?: string }>;
     loadCoordinates: () => Promise<{
       '2d': Record<string, { x: number; y: number }>;
@@ -54,5 +56,10 @@ interface Window {
     checkMigration: () => Promise<{ done: boolean }>;
     runMigration: () => Promise<{ success?: boolean; skipped?: boolean; moved?: string[]; error?: string }>;
     startupGitPull: () => Promise<{ success: boolean; skipped?: boolean; error?: string }>;
+    vaultStatus: () => Promise<{ exists: boolean; unlocked: boolean; autoLockMinutes: number }>;
+    vaultSetup: (password: string) => Promise<{ success: boolean; error?: string }>;
+    vaultUnlock: (password: string) => Promise<{ success: boolean; error?: string }>;
+    vaultLock: () => Promise<{ success: boolean }>;
+    onVaultLocked: (callback: () => void) => () => void;
   };
 }

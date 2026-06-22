@@ -23,7 +23,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appendToNote: (data) => ipcRenderer.invoke('append-to-note', data),
   loadGraphSettings: () => ipcRenderer.invoke('load-graph-settings'),
   saveGraphSettings: (settings) => ipcRenderer.invoke('save-graph-settings', settings),
-  
+
+  // 暗号化保管庫
+  vaultStatus: () => ipcRenderer.invoke('vault-status'),
+  vaultSetup: (password) => ipcRenderer.invoke('vault-setup', { password }),
+  vaultUnlock: (password) => ipcRenderer.invoke('vault-unlock', { password }),
+  vaultLock: () => ipcRenderer.invoke('vault-lock'),
+  onVaultLocked: (callback) => {
+    const subscription = () => callback();
+    ipcRenderer.on('vault-locked', subscription);
+    return () => {
+      ipcRenderer.removeListener('vault-locked', subscription);
+    };
+  },
+
   // Gitステータス変更の通知リスナー
   onGitStatusChanged: (callback) => {
     const subscription = (event, status, error) => callback(status, error);

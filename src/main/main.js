@@ -2,8 +2,31 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const simpleGit = require('simple-git');
+const cryptoVault = require('./cryptoVault');
 
 let mainWindow;
+
+// ---------- 暗号化保管庫（private/）の状態 ----------
+let vaultPassword = null;        // ロック解除中だけメモリ保持
+let vaultAutoLockTimer = null;
+const isPrivatePath = (name) => name.replace(/\\/g, '/').startsWith('private/');
+const vaultFilePath = () => path.join(appConfig.notesPath, 'private', '_vault.json');
+
+function vaultAutoLockMinutes() {
+  const n = Number(appConfig.vaultAutoLockMinutes);
+  return Number.isFinite(n) ? n : 15;
+}
+
+function refreshVaultAutoLock() {
+  if (vaultAutoLockTimer) clearTimeout(vaultAutoLockTimer);
+  const mins = vaultAutoLockMinutes();
+  if (vaultPassword && mins > 0) {
+    vaultAutoLockTimer = setTimeout(() => {
+      vaultPassword = null;
+      mainWindow?.webContents.send('vault-locked');
+    }, mins * 60000);
+  }
+}
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 const appUserDataPath = app.getPath('userData');
@@ -19,6 +42,7 @@ let appConfig = {
   notesPath: defaultNotesPath,
   gitRemoteUrl: '',
   autoSync: false,
+  vaultAutoLockMinutes: 15,
 };
 
 function loadConfig() {
@@ -585,26 +609,25 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
             
             let cached = cache[relativePath];
             if (!cached || cached.updatedAt !== mtimeStr) {
-              let content = '';
-              try {
-                content = await fs.promises.readFile(filePath, 'utf8');
-              } catch (err) {
-                console.error(err);
+              // private/ 配下は暗号文なのでメタデータ解析しない（情報漏洩防止）
+              if (isPrivatePath(relativePath)) {
+                cached = { updatedAt: mtimeStr, createdAt: null, tags: [], wikiLinks: [], isEmpty: false };
+              } else {
+                let content = '';
+                try {
+                  content = await fs.promises.readFile(filePath, 'utf8');
+                } catch (err) {
+                  console.error(err);
+                }
+                const tags = extractTags(content);
+                const wikiLinks = extractWikiLinks(content);
+                const isEmpty = content.split('\n').filter((l) => {
+                  const t = l.trim();
+                  return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
+                }).length === 0;
+                const createdAt = extractCreatedAt(content);
+                cached = { updatedAt: mtimeStr, createdAt, tags, wikiLinks, isEmpty };
               }
-              const tags = extractTags(content);
-              const wikiLinks = extractWikiLinks(content);
-              const isEmpty = content.split('\n').filter((l) => {
-                const t = l.trim();
-                return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
-              }).length === 0;
-              const createdAt = extractCreatedAt(content);
-              cached = {
-                updatedAt: mtimeStr,
-                createdAt,
-                tags,
-                wikiLinks,
-                isEmpty
-              };
               cache[relativePath] = cached;
               cacheUpdated.value = true;
             }
@@ -661,7 +684,14 @@ ipcMain.handle('read-note', async (event, filename) => {
     if (!exists) {
       throw new Error('File not found');
     }
-    return await fs.promises.readFile(filePath, 'utf8');
+    let content = await fs.promises.readFile(filePath, 'utf8');
+    // private/ 配下の暗号化ノートは復号して返す
+    if (isPrivatePath(filename) && cryptoVault.isEncrypted(content)) {
+      if (!vaultPassword) throw new Error('VAULT_LOCKED');
+      content = cryptoVault.decrypt(content, vaultPassword);
+      refreshVaultAutoLock();
+    }
+    return content;
   } catch (err) {
     console.error('Failed to read note:', err);
     throw err;
@@ -685,8 +715,16 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
 
     const filePath = resolveNotePath(notesPath, relName);
 
+    // private/ 配下は暗号化して保存
+    let toWrite = content;
+    if (isPrivatePath(relName)) {
+      if (!vaultPassword) return { success: false, error: 'VAULT_LOCKED' };
+      toWrite = cryptoVault.encrypt(content, vaultPassword);
+      refreshVaultAutoLock();
+    }
+
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content, 'utf8');
+    fs.writeFileSync(filePath, toWrite, 'utf8');
     updateIndex();
     return { success: true, path: filePath, name: relName };
   } catch (err) {
@@ -741,6 +779,18 @@ ipcMain.handle('append-to-note', async (event, { filename, appendContent }) => {
     if (!fs.existsSync(notesPath)) fs.mkdirSync(notesPath, { recursive: true });
 
     const filePath = resolveNotePath(notesPath, filename);
+    if (isPrivatePath(filename)) {
+      if (!vaultPassword) return { success: false, error: 'VAULT_LOCKED' };
+      let existing = '';
+      if (fs.existsSync(filePath)) {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        existing = cryptoVault.isEncrypted(raw) ? cryptoVault.decrypt(raw, vaultPassword) : raw;
+      }
+      const merged = existing.trimEnd() + '\n\n' + appendContent.trimStart();
+      fs.writeFileSync(filePath, cryptoVault.encrypt(merged, vaultPassword), 'utf8');
+      refreshVaultAutoLock();
+      return { success: true, path: filePath };
+    }
     const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
     fs.writeFileSync(filePath, existing.trimEnd() + '\n\n' + appendContent.trimStart(), 'utf8');
     return { success: true, path: filePath };
@@ -748,6 +798,57 @@ ipcMain.handle('append-to-note', async (event, { filename, appendContent }) => {
     console.error('Failed to append to note:', err);
     return { success: false, error: err.message };
   }
+});
+
+// ---------- 暗号化保管庫の IPC ----------
+// 保管庫の状態を返す
+ipcMain.handle('vault-status', async () => {
+  const exists = fs.existsSync(vaultFilePath());
+  return { exists, unlocked: !!vaultPassword, autoLockMinutes: vaultAutoLockMinutes() };
+});
+
+// 保管庫を新規作成（パスワード設定）
+ipcMain.handle('vault-setup', async (event, { password }) => {
+  try {
+    if (!password) return { success: false, error: 'パスワードが空です' };
+    const privDir = path.join(appConfig.notesPath, 'private');
+    fs.mkdirSync(privDir, { recursive: true });
+    if (fs.existsSync(vaultFilePath())) {
+      return { success: false, error: '保管庫は既に存在します' };
+    }
+    const token = cryptoVault.createVerifyToken(password);
+    fs.writeFileSync(vaultFilePath(), JSON.stringify({ version: 1, token }, null, 2), 'utf8');
+    vaultPassword = password;
+    refreshVaultAutoLock();
+    return { success: true };
+  } catch (err) {
+    console.error('vault-setup failed:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// パスワードでロック解除
+ipcMain.handle('vault-unlock', async (event, { password }) => {
+  try {
+    if (!fs.existsSync(vaultFilePath())) return { success: false, error: '保管庫がありません' };
+    const { token } = JSON.parse(fs.readFileSync(vaultFilePath(), 'utf8'));
+    if (!cryptoVault.verifyPassword(token, password)) {
+      return { success: false, error: 'パスワードが違います' };
+    }
+    vaultPassword = password;
+    refreshVaultAutoLock();
+    return { success: true };
+  } catch (err) {
+    console.error('vault-unlock failed:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// 手動ロック
+ipcMain.handle('vault-lock', async () => {
+  vaultPassword = null;
+  if (vaultAutoLockTimer) clearTimeout(vaultAutoLockTimer);
+  return { success: true };
 });
 
 ipcMain.handle('sync-git', async () => runGitSync());

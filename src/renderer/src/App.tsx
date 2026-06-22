@@ -61,6 +61,7 @@ interface AppConfig {
   notesPath: string;
   gitRemoteUrl: string;
   autoSync: boolean;
+  vaultAutoLockMinutes?: number;
   customPrompts?: CustomPrompt[];
 }
 
@@ -69,6 +70,7 @@ const emptyConfig: AppConfig = {
   notesPath: '',
   gitRemoteUrl: '',
   autoSync: false,
+  vaultAutoLockMinutes: 15,
   customPrompts: [],
 };
 
@@ -262,6 +264,16 @@ export default function App() {
   const [localGraphTarget, setLocalGraphTarget] = useState<string | null>(null);
   const [showNewNoteModal, setShowNewNoteModal] = useState(false);
   const [newNoteName, setNewNoteName] = useState('Untitled');
+  // 暗号化保管庫
+  const [vaultExists, setVaultExists] = useState(false);
+  const [vaultUnlocked, setVaultUnlocked] = useState(false);
+  const [showVaultUnlock, setShowVaultUnlock] = useState(false);
+  const [showVaultSetup, setShowVaultSetup] = useState(false);
+  const [vaultPwInput, setVaultPwInput] = useState('');
+  const [vaultPwInput2, setVaultPwInput2] = useState('');
+  const [vaultError, setVaultError] = useState('');
+  const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
+  const [newNoteIsPrivate, setNewNoteIsPrivate] = useState(false);
   const [showMocModal, setShowMocModal] = useState(false);
   const [mocTitle, setMocTitle] = useState('');
   const [mocAiMode, setMocAiMode] = useState(false);
@@ -627,7 +639,20 @@ export default function App() {
 
   // ノートを開く：タブ追加 + チャット履歴クリア
   async function openNote(note: Note) {
-    const noteContent = await window.electronAPI.readNote(note.name);
+    let noteContent: string;
+    try {
+      noteContent = await window.electronAPI.readNote(note.name);
+    } catch (e) {
+      if (String(e).includes('VAULT_LOCKED')) {
+        // 保管庫がロック中 → 解除ダイアログを表示し、解除後に開く
+        setPendingPrivateNote(note);
+        setVaultPwInput('');
+        setVaultError('');
+        setShowVaultUnlock(true);
+        return;
+      }
+      throw e;
+    }
 
     // 別ノートへの切り替えならチャット履歴をクリア
     if (selectedNote && selectedNote.name !== note.name) {
@@ -680,6 +705,56 @@ export default function App() {
         const newIndex = prev.findIndex((t) => t.name === over.id);
         return arrayMove(prev, oldIndex, newIndex);
       });
+    }
+  }
+
+  // 保管庫: ロック解除
+  async function handleVaultUnlock() {
+    setVaultError('');
+    const res = await window.electronAPI.vaultUnlock(vaultPwInput);
+    if (!res.success) {
+      setVaultError(res.error ?? 'ロック解除に失敗しました');
+      return;
+    }
+    setVaultUnlocked(true);
+    setShowVaultUnlock(false);
+    setVaultPwInput('');
+    const pending = pendingPrivateNote;
+    setPendingPrivateNote(null);
+    if (pending) await openNote(pending);
+  }
+
+  // 保管庫: 新規作成（パスワード設定）
+  async function handleVaultSetup() {
+    setVaultError('');
+    if (vaultPwInput.length < 4) {
+      setVaultError('パスワードは4文字以上にしてください');
+      return;
+    }
+    if (vaultPwInput !== vaultPwInput2) {
+      setVaultError('パスワードが一致しません');
+      return;
+    }
+    const res = await window.electronAPI.vaultSetup(vaultPwInput);
+    if (!res.success) {
+      setVaultError(res.error ?? '作成に失敗しました');
+      return;
+    }
+    setVaultExists(true);
+    setVaultUnlocked(true);
+    setShowVaultSetup(false);
+    setVaultPwInput('');
+    setVaultPwInput2('');
+  }
+
+  // 保管庫: 手動ロック
+  async function handleVaultLock() {
+    await window.electronAPI.vaultLock();
+    setVaultUnlocked(false);
+    // private ノートを開いていたら閉じてプレビューをクリア
+    if (selectedNote && selectedNote.name.startsWith('private/')) {
+      setContent('');
+      setSelectedNote(null);
     }
   }
 
@@ -769,13 +844,20 @@ export default function App() {
     const now = new Date();
     const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
-    const result = await window.electronAPI.saveNote({ filename: name, content: initial });
+    // プライベート指定なら private/ 配下に作成（暗号化される）
+    const filename = newNoteIsPrivate ? `private/${name}` : name;
+    if (newNoteIsPrivate && !vaultUnlocked) {
+      alert('保管庫がロックされています。先にロックを解除してください。');
+      return;
+    }
+    const result = await window.electronAPI.saveNote({ filename, content: initial });
     if (!result.success) {
       alert(result.error ?? 'ノートを作成できませんでした');
       return;
     }
     setShowNewNoteModal(false);
     setNewNoteName('Untitled');
+    setNewNoteIsPrivate(false);
     await loadNotesList();
     const savedName = result.name ?? name;
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
@@ -1307,7 +1389,15 @@ export default function App() {
       setGitStatus(status);
       setGitError(error ?? null);
     });
-    return unsubscribe;
+    // 保管庫の状態取得＋自動ロック通知の購読
+    window.electronAPI.vaultStatus().then((s) => {
+      setVaultExists(s.exists);
+      setVaultUnlocked(s.unlocked);
+    });
+    const unsubVault = window.electronAPI.onVaultLocked(() => {
+      setVaultUnlocked(false);
+    });
+    return () => { unsubscribe(); unsubVault(); };
   }, []);
 
   useEffect(() => {
@@ -2282,6 +2372,43 @@ export default function App() {
               自動同期を有効にする
             </label>
 
+            {/* 暗号化保管庫セクション */}
+            <div className="mb-5 border-t border-white/10 pt-4">
+              <h3 className="mb-3 text-sm font-semibold text-gray-200">🔒 暗号化保管庫（private/）</h3>
+              {!vaultExists ? (
+                <button
+                  type="button"
+                  onClick={() => { setVaultPwInput(''); setVaultPwInput2(''); setVaultError(''); setShowVaultSetup(true); }}
+                  className="w-full rounded bg-indigo-600/30 py-2 text-xs font-semibold text-indigo-300 hover:bg-indigo-600/50 transition-colors"
+                >
+                  保管庫を作成（パスワード設定）
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className={vaultUnlocked ? 'text-emerald-400' : 'text-gray-400'}>
+                      状態: {vaultUnlocked ? '🔓 ロック解除中' : '🔒 ロック中'}
+                    </span>
+                    {vaultUnlocked ? (
+                      <button type="button" onClick={handleVaultLock} className="ml-auto rounded bg-red-500/20 px-3 py-1 text-[11px] font-semibold text-red-300 hover:bg-red-500/30">今すぐロック</button>
+                    ) : (
+                      <button type="button" onClick={() => { setVaultPwInput(''); setVaultError(''); setShowVaultUnlock(true); }} className="ml-auto rounded bg-indigo-500/20 px-3 py-1 text-[11px] font-semibold text-indigo-300 hover:bg-indigo-500/30">ロック解除</button>
+                    )}
+                  </div>
+                  <label className="block text-xs">
+                    <span className="mb-1 block text-gray-400">自動ロック時間（分・0で無効）</span>
+                    <input
+                      type="number"
+                      min={0}
+                      className="w-full rounded bg-black/30 px-3 py-1.5 outline-none text-gray-200"
+                      value={config.vaultAutoLockMinutes ?? 15}
+                      onChange={(e) => setConfig((prev) => ({ ...prev, vaultAutoLockMinutes: Number(e.target.value) }))}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
             {/* カスタムプロンプトセクション */}
             <div className="mb-5 border-t border-white/10 pt-4">
               <h3 className="mb-3 text-sm font-semibold text-gray-200">■ カスタムプロンプト</h3>
@@ -2403,7 +2530,7 @@ export default function App() {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <label className="mb-5 block text-sm">
+            <label className="mb-3 block text-sm">
               <span className="mb-1 block text-gray-300">ノート名</span>
               <input
                 className="w-full rounded bg-black/30 px-3 py-2 outline-none"
@@ -2412,6 +2539,18 @@ export default function App() {
                 autoFocus
               />
             </label>
+
+            {vaultExists && (
+              <label className="mb-5 flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="rounded"
+                  checked={newNoteIsPrivate}
+                  onChange={(e) => setNewNoteIsPrivate(e.target.checked)}
+                />
+                <span>🔒 プライベート（暗号化して保管庫に保存）</span>
+              </label>
+            )}
 
             {isAiNoteMode && (
               <div className="mb-5 block text-sm">
@@ -2448,6 +2587,62 @@ export default function App() {
 
             <button className="w-full rounded bg-indigo-500 px-4 py-2 font-semibold hover:bg-indigo-400">作成</button>
           </form>
+        </div>
+      )}
+
+      {/* 保管庫ロック解除ダイアログ */}
+      {showVaultUnlock && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl">
+            <h2 className="mb-1 text-lg font-semibold">🔒 保管庫のロック解除</h2>
+            <p className="mb-4 text-xs text-gray-400">パスワードを入力してください（このセッション中は再入力不要）</p>
+            <input
+              type="password"
+              className="mb-2 w-full rounded bg-black/30 px-3 py-2 outline-none"
+              value={vaultPwInput}
+              onChange={(e) => setVaultPwInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleVaultUnlock(); }}
+              autoFocus
+            />
+            {vaultError && <p className="mb-2 text-xs text-red-400">{vaultError}</p>}
+            <div className="flex gap-3">
+              <button onClick={handleVaultUnlock} className="flex-1 rounded bg-indigo-500 py-2 text-sm font-semibold hover:bg-indigo-400">解除</button>
+              <button onClick={() => { setShowVaultUnlock(false); setPendingPrivateNote(null); setVaultPwInput(''); }} className="rounded border border-white/10 px-4 py-2 text-sm text-gray-400 hover:bg-white/5">キャンセル</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 保管庫の新規作成（パスワード設定）ダイアログ */}
+      {showVaultSetup && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl">
+            <h2 className="mb-1 text-lg font-semibold">🔒 保管庫を作成</h2>
+            <p className="mb-3 rounded bg-red-900/30 px-3 py-2 text-xs text-red-300">
+              ⚠️ パスワードを忘れると中身は<strong>二度と復元できません</strong>。必ず安全な場所に控えてください。
+            </p>
+            <input
+              type="password"
+              placeholder="パスワード（4文字以上）"
+              className="mb-2 w-full rounded bg-black/30 px-3 py-2 outline-none"
+              value={vaultPwInput}
+              onChange={(e) => setVaultPwInput(e.target.value)}
+              autoFocus
+            />
+            <input
+              type="password"
+              placeholder="パスワード（確認）"
+              className="mb-2 w-full rounded bg-black/30 px-3 py-2 outline-none"
+              value={vaultPwInput2}
+              onChange={(e) => setVaultPwInput2(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleVaultSetup(); }}
+            />
+            {vaultError && <p className="mb-2 text-xs text-red-400">{vaultError}</p>}
+            <div className="flex gap-3">
+              <button onClick={handleVaultSetup} className="flex-1 rounded bg-indigo-500 py-2 text-sm font-semibold hover:bg-indigo-400">作成</button>
+              <button onClick={() => { setShowVaultSetup(false); setVaultPwInput(''); setVaultPwInput2(''); setVaultError(''); }} className="rounded border border-white/10 px-4 py-2 text-sm text-gray-400 hover:bg-white/5">キャンセル</button>
+            </div>
+          </div>
         </div>
       )}
 
