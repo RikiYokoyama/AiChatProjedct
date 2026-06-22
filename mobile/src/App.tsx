@@ -352,6 +352,19 @@ export default function App() {
     }
   }
 
+  // 鍵アイコン: 未作成→作成 / ロック中→解除 / 解除中→ロック
+  function handleVaultKeyClick() {
+    if (!vaultExists) { setVaultPw(''); setVaultPw2(''); setVaultError(''); setVaultModal('setup'); }
+    else if (!vaultUnlocked) { setVaultPw(''); setVaultError(''); setPendingPrivateNote(null); setVaultModal('unlock'); }
+    else handleVaultLock();
+  }
+
+  // private/ 配下はロック解除中のみ一覧に表示
+  const visibleNotes = useMemo(
+    () => notes.filter((n) => vaultUnlocked || !(n.remotePath || n.name).startsWith('private/')),
+    [notes, vaultUnlocked],
+  );
+
   // ---------- ファイル作成 ----------
   async function createNote(title: string, useAi: boolean, aiMode?: string) {
     const firstLine = title.split('\n')[0].trim();
@@ -948,12 +961,14 @@ export default function App() {
         {/* ファイルタブ */}
         {tab === 'files' && (
           <FilesScreen
-            notes={notes}
+            notes={visibleNotes}
             recentNames={recentNames}
             favorites={favorites}
             archived={archived}
             selectedName={noteTabSelectedName}
             chatModes={chatModes}
+            vaultUnlocked={vaultUnlocked}
+            onVaultClick={handleVaultKeyClick}
             onOpen={(note) => { selectNoteForNoteTab(note); setTab('note'); }}
             onCreate={createNote}
             onCreateMemo={createMemo}
@@ -968,7 +983,7 @@ export default function App() {
         {/* グラフタブ */}
         {tab === 'graph' && (
           <GraphScreen
-            notes={notes}
+            notes={visibleNotes}
             centerNoteName={localGraphTarget}
             onSelectNote={(name) => {
               setLocalGraphTarget(null);

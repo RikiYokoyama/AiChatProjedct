@@ -10,7 +10,9 @@ import {
   FolderOpen,
   FolderClosed,
   GitBranch,
+  KeyRound,
   Loader2,
+  Lock,
   Network,
   Plus,
   Save,
@@ -469,7 +471,8 @@ export default function App() {
   }, [notes]);
 
   const filteredNotes = useMemo(() => {
-    let result = [...notes];
+    // private/ 配下はロック解除中のみ一覧に表示
+    let result = notes.filter((n) => vaultUnlocked || !n.name.startsWith('private/'));
     const query = searchQuery.trim();
     if (query) {
       const queryLower = query.toLowerCase();
@@ -508,7 +511,7 @@ export default function App() {
         return db.getTime() - da.getTime();
       }
     });
-  }, [notes, searchQuery, sortBy]);
+  }, [notes, searchQuery, sortBy, vaultUnlocked]);
 
   // 検索サジェスト候補の抽出
   const suggestions = useMemo(() => {
@@ -531,14 +534,14 @@ export default function App() {
     } else if (queryLower.startsWith('link:')) {
       const val = query.substring(5).trim().toLowerCase();
       return notes
-        .filter((n) => n.name.toLowerCase().includes(val))
+        .filter((n) => (vaultUnlocked || !n.name.startsWith('private/')) && n.name.toLowerCase().includes(val))
         .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     } else {
       return notes
-        .filter((n) => n.name.toLowerCase().includes(queryLower))
+        .filter((n) => (vaultUnlocked || !n.name.startsWith('private/')) && n.name.toLowerCase().includes(queryLower))
         .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     }
-  }, [notes, searchQuery, allTagsMap]);
+  }, [notes, searchQuery, allTagsMap, vaultUnlocked]);
 
   const selectSuggestion = (s: { type: string; value: string }) => {
     if (s.type === 'tag') {
@@ -705,6 +708,17 @@ export default function App() {
         const newIndex = prev.findIndex((t) => t.name === over.id);
         return arrayMove(prev, oldIndex, newIndex);
       });
+    }
+  }
+
+  // リボンの鍵アイコン: 未作成→作成 / ロック中→解除 / 解除中→ロック
+  function handleVaultKeyClick() {
+    if (!vaultExists) {
+      setVaultPwInput(''); setVaultPwInput2(''); setVaultError(''); setShowVaultSetup(true);
+    } else if (!vaultUnlocked) {
+      setVaultPwInput(''); setVaultError(''); setPendingPrivateNote(null); setShowVaultUnlock(true);
+    } else {
+      handleVaultLock();
     }
   }
 
@@ -1502,6 +1516,13 @@ export default function App() {
               className="flex h-10 w-10 items-center justify-center rounded text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
             >
               {gitStatus === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+            </button>
+            <button
+              title={vaultUnlocked ? 'プライベート保管庫（解除中・クリックでロック）' : 'プライベート保管庫（クリックで解除）'}
+              onClick={handleVaultKeyClick}
+              className={`flex h-10 w-10 items-center justify-center rounded transition-colors hover:bg-white/10 ${vaultUnlocked ? 'text-emerald-400 hover:text-emerald-300' : 'text-gray-500 hover:text-gray-200'}`}
+            >
+              {vaultUnlocked ? <KeyRound className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
             </button>
             <RibbonButton icon={<Settings className="h-4 w-4" />} active={ribbonView === 'settings'} title="設定" onClick={() => setRibbonView('settings')} />
           </div>
