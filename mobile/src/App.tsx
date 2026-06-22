@@ -49,6 +49,10 @@ import {
   addEntryToIndex,
   appendToMasterMoc,
   loadNoteListCache,
+  setVaultPassword,
+  vaultExistsOnGitHub,
+  setupVaultOnGitHub,
+  unlockVaultFromGitHub,
 } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
@@ -68,6 +72,15 @@ export default function App() {
   // ノートタブ（NoteScreen）用
   const [noteTabSelectedName, setNoteTabSelectedName] = useState<string | null>(null);
   const [noteTabContent, setNoteTabContent] = useState('');
+
+  // 暗号化保管庫
+  const [vaultExists, setVaultExists] = useState(false);
+  const [vaultUnlocked, setVaultUnlocked] = useState(false);
+  const [vaultModal, setVaultModal] = useState<null | 'unlock' | 'setup'>(null);
+  const [vaultPw, setVaultPw] = useState('');
+  const [vaultPw2, setVaultPw2] = useState('');
+  const [vaultError, setVaultError] = useState('');
+  const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
 
   const [recentNames, setRecentNames] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -146,6 +159,9 @@ export default function App() {
             saveMasterTagsLocal(merged);
           }
         }).catch(() => {});
+
+        // 保管庫の有無を確認
+        vaultExistsOnGitHub(cfg.gitRemoteUrl).then(setVaultExists).catch(() => {});
       } else {
         // GitHub 未設定: ローカルストレージから読み込み
         setNotes(await listNotes());
@@ -278,6 +294,11 @@ export default function App() {
         setNoteTabContent(content);
         setNotes(prev => prev.map(n => n.name === note.name ? { ...n, content, sha } : n));
       } catch (err) {
+        if (String(err).includes('VAULT_LOCKED')) {
+          setPendingPrivateNote(note);
+          setVaultPw(''); setVaultError(''); setVaultModal('unlock');
+          return;
+        }
         alert('ノートの読み込みに失敗しました: ' + (err instanceof Error ? err.message : String(err)));
       }
     } else {
@@ -285,6 +306,51 @@ export default function App() {
     }
     setRecentNames((prev) => [note.name, ...prev.filter((n) => n !== note.name)].slice(0, 10));
   }, []);
+
+  // ---------- 保管庫 ----------
+  async function handleVaultUnlock() {
+    setVaultError('');
+    const cfg = configRef.current;
+    if (!cfg.gitRemoteUrl) { setVaultError('GitHub未設定です'); return; }
+    try {
+      const ok = await unlockVaultFromGitHub(cfg.gitRemoteUrl, vaultPw);
+      if (!ok) { setVaultError('パスワードが違います'); return; }
+      setVaultUnlocked(true);
+      setVaultModal(null);
+      setVaultPw('');
+      const pending = pendingPrivateNote;
+      setPendingPrivateNote(null);
+      if (pending) selectNoteForNoteTab(pending);
+    } catch (e) {
+      setVaultError('解除に失敗しました: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function handleVaultSetup() {
+    setVaultError('');
+    if (vaultPw.length < 4) { setVaultError('パスワードは4文字以上にしてください'); return; }
+    if (vaultPw !== vaultPw2) { setVaultError('パスワードが一致しません'); return; }
+    const cfg = configRef.current;
+    if (!cfg.gitRemoteUrl) { setVaultError('GitHub未設定です'); return; }
+    try {
+      await setupVaultOnGitHub(cfg.gitRemoteUrl, vaultPw);
+      setVaultExists(true);
+      setVaultUnlocked(true);
+      setVaultModal(null);
+      setVaultPw(''); setVaultPw2('');
+    } catch (e) {
+      setVaultError('作成に失敗しました: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  function handleVaultLock() {
+    setVaultPassword(null);
+    setVaultUnlocked(false);
+    if (noteTabSelectedName && noteTabSelectedName.startsWith('private')) {
+      setNoteTabContent('');
+      setNoteTabSelectedName(null);
+    }
+  }
 
   // ---------- ファイル作成 ----------
   async function createNote(title: string, useAi: boolean, aiMode?: string) {
@@ -938,18 +1004,86 @@ export default function App() {
 
         {/* 設定タブ */}
         {tab === 'settings' && (
-          <SettingsScreen
-            config={config}
-            gitStatus={gitStatus}
-            gitMessage={gitMessage}
-            aiModelMode={aiModelMode}
-            onSave={handleSaveConfig}
-            onSync={() => runSync()}
-            onDeletePrompt={handleDeletePrompt}
-            onModelModeChange={setAiModelMode}
-          />
+          <>
+            <SettingsScreen
+              config={config}
+              gitStatus={gitStatus}
+              gitMessage={gitMessage}
+              aiModelMode={aiModelMode}
+              onSave={handleSaveConfig}
+              onSync={() => runSync()}
+              onDeletePrompt={handleDeletePrompt}
+              onModelModeChange={setAiModelMode}
+            />
+            <div className="mx-auto max-w-2xl px-4 pb-6">
+              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                <h3 className="mb-3 text-sm font-semibold text-gray-200">🔒 暗号化保管庫（private/）</h3>
+                {!vaultExists ? (
+                  <button
+                    onClick={() => { setVaultPw(''); setVaultPw2(''); setVaultError(''); setVaultModal('setup'); }}
+                    className="w-full rounded bg-indigo-600/30 py-2 text-xs font-semibold text-indigo-300 active:bg-indigo-600/50"
+                  >保管庫を作成（パスワード設定）</button>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className={vaultUnlocked ? 'text-emerald-400' : 'text-gray-400'}>
+                      状態: {vaultUnlocked ? '🔓 解除中' : '🔒 ロック中'}
+                    </span>
+                    {vaultUnlocked ? (
+                      <button onClick={handleVaultLock} className="ml-auto rounded bg-red-500/20 px-3 py-1 text-[11px] font-semibold text-red-300 active:bg-red-500/30">今すぐロック</button>
+                    ) : (
+                      <button onClick={() => { setVaultPw(''); setVaultError(''); setVaultModal('unlock'); }} className="ml-auto rounded bg-indigo-500/20 px-3 py-1 text-[11px] font-semibold text-indigo-300 active:bg-indigo-500/30">ロック解除</button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
         )}
       </main>
+
+      {/* 保管庫モーダル */}
+      {vaultModal && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4" onClick={() => setVaultModal(null)}>
+          <div className="w-full max-w-sm rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-2 text-lg font-semibold text-gray-100">
+              {vaultModal === 'setup' ? '🔒 保管庫を作成' : '🔒 ロック解除'}
+            </h2>
+            {vaultModal === 'setup' && (
+              <p className="mb-3 rounded bg-red-900/30 px-3 py-2 text-xs text-red-300">
+                ⚠️ パスワードを忘れると中身は<strong>二度と復元できません</strong>。
+              </p>
+            )}
+            <input
+              type="password"
+              placeholder="パスワード"
+              className="mb-2 w-full rounded bg-black/30 px-3 py-2 text-gray-100 outline-none"
+              value={vaultPw}
+              onChange={(e) => setVaultPw(e.target.value)}
+              autoFocus
+            />
+            {vaultModal === 'setup' && (
+              <input
+                type="password"
+                placeholder="パスワード（確認）"
+                className="mb-2 w-full rounded bg-black/30 px-3 py-2 text-gray-100 outline-none"
+                value={vaultPw2}
+                onChange={(e) => setVaultPw2(e.target.value)}
+              />
+            )}
+            {vaultError && <p className="mb-2 text-xs text-red-400">{vaultError}</p>}
+            <div className="flex gap-3">
+              <button
+                onClick={vaultModal === 'setup' ? handleVaultSetup : handleVaultUnlock}
+                className="flex-1 rounded bg-indigo-500 py-2 text-sm font-semibold text-white active:bg-indigo-400"
+              >{vaultModal === 'setup' ? '作成' : '解除'}</button>
+              <button
+                onClick={() => { setVaultModal(null); setPendingPrivateNote(null); setVaultPw(''); setVaultPw2(''); }}
+                className="rounded border border-white/10 px-4 py-2 text-sm text-gray-400 active:bg-white/5"
+              >キャンセル</button>
+            </div>
+          </div>
+        </div>
+      )}
 
 
       <BottomNav

@@ -2,8 +2,15 @@
 // git クローンの代わりに GitHub Git Trees API を使い、.md ファイルを archive/YYYY-MM/ 階層とローカルのフラット階層で双方向同期する。
 import { Preferences } from '@capacitor/preferences';
 import { listNotes, writeNote } from './storage';
+import { encrypt as vaultEncrypt, decrypt as vaultDecrypt, isEncrypted as vaultIsEncrypted, createVerifyToken, verifyPassword } from './cryptoVault';
 
 const API = 'https://api.github.com';
+
+// ---------- 暗号化保管庫（private/）セッション ----------
+let vaultPassword: string | null = null;
+export function setVaultPassword(pw: string | null) { vaultPassword = pw; }
+export function getVaultUnlocked() { return vaultPassword !== null; }
+export function isPrivatePath(p: string) { return p.replace(/^\/+/, '').startsWith('private/'); }
 
 export interface SyncResult {
   pushed: string[];
@@ -419,7 +426,13 @@ export async function fetchNoteContentFromGitHub(
 ): Promise<{ content: string; sha: string }> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) throw new Error('GitHubの設定が不正です');
-  return new GitHubSync(token, repo, branch).fetchRemoteFile(remotePath);
+  const res = await new GitHubSync(token, repo, branch).fetchRemoteFile(remotePath);
+  // private/ 配下の暗号化ノートは復号して返す
+  if (isPrivatePath(remotePath) && vaultIsEncrypted(res.content)) {
+    if (vaultPassword === null) throw new Error('VAULT_LOCKED');
+    res.content = await vaultDecrypt(res.content, vaultPassword);
+  }
+  return res;
 }
 
 /** GitHub にファイルを作成または更新する（sha は更新時に必須） */
@@ -431,9 +444,46 @@ export async function saveNoteToGitHub(
 ): Promise<string> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) throw new Error('GitHubの設定が不正です');
+  let toWrite = content;
+  // private/ 配下は暗号化して保存
+  if (isPrivatePath(remotePath)) {
+    if (vaultPassword === null) throw new Error('VAULT_LOCKED');
+    toWrite = await vaultEncrypt(content, vaultPassword);
+  }
   const sync = new GitHubSync(token, repo, branch);
-  const newSha = await sync.putFile(remotePath, content, sha);
+  const newSha = await sync.putFile(remotePath, toWrite, sha);
   return newSha ?? '';
+}
+
+// ---------- 保管庫の作成・解除（_vault.json で検証） ----------
+export async function vaultExistsOnGitHub(gitRemoteUrl: string): Promise<boolean> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return false;
+  try {
+    await new GitHubSync(token, repo, branch).fetchRemoteFile('private/_vault.json');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function setupVaultOnGitHub(gitRemoteUrl: string, password: string): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) throw new Error('GitHubの設定が不正です');
+  const tokenStr = await createVerifyToken(password);
+  const sync = new GitHubSync(token, repo, branch);
+  await sync.putFile('private/_vault.json', JSON.stringify({ version: 1, token: tokenStr }, null, 2));
+  vaultPassword = password;
+}
+
+export async function unlockVaultFromGitHub(gitRemoteUrl: string, password: string): Promise<boolean> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) throw new Error('GitHubの設定が不正です');
+  const file = await new GitHubSync(token, repo, branch).fetchRemoteFile('private/_vault.json');
+  const { token: verifyTok } = JSON.parse(file.content);
+  const ok = await verifyPassword(verifyTok, password);
+  if (ok) vaultPassword = password;
+  return ok;
 }
 
 /** 現在の年月を "YYYY-MM" 形式で返す */
