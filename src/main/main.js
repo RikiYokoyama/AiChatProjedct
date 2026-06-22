@@ -12,6 +12,27 @@ let vaultAutoLockTimer = null;
 const isPrivatePath = (name) => name.replace(/\\/g, '/').startsWith('private/');
 const vaultFilePath = () => path.join(appConfig.notesPath, 'private', '_vault.json');
 
+// private/_names.enc にタイムスタンプ→表示名マッピングを追記
+// モバイル側が vault unlock 後に displayName を解決するために使う
+async function updatePrivateNamesEnc(notesPath, timestampFilename, displayName) {
+  const namesPath = path.join(notesPath, 'private', '_names.enc');
+  let existing = {};
+  try {
+    if (fs.existsSync(namesPath)) {
+      const raw = fs.readFileSync(namesPath, 'utf8');
+      if (cryptoVault.isEncrypted(raw)) {
+        const json = await cryptoVault.decryptAsync(raw, vaultPassword);
+        existing = JSON.parse(json);
+      }
+    }
+  } catch (e) {
+    console.error('_names.enc read failed:', e.message);
+  }
+  existing[timestampFilename] = displayName;
+  const encrypted = cryptoVault.encrypt(JSON.stringify(existing), vaultPassword);
+  fs.writeFileSync(namesPath, encrypted, 'utf8');
+}
+
 function vaultAutoLockMinutes() {
   const n = Number(appConfig.vaultAutoLockMinutes);
   return Number.isFinite(n) ? n : 15;
@@ -618,6 +639,11 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
                     displayName = decrypted.split('\n')[0].replace(/^#+\s*/, '').trim() || null;
                     tags = extractTags(decrypted);
                     createdAt = extractCreatedAt(decrypted);
+                    // タイムスタンプIDのノートを _names.enc に登録（モバイル用マイグレーション）
+                    const basename = path.basename(relativePath);
+                    if (/^\d{13,}\.md$/.test(basename) && displayName) {
+                      updatePrivateNamesEnc(basePath, basename, displayName).catch(() => {});
+                    }
                   }
                 } catch (err) {
                   console.error(`Private decrypt failed (${relativePath}):`, err.message);
@@ -734,10 +760,19 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
     }
 
     // private/ の新規ファイルはタイムスタンプIDで保存（GitHub上でファイル名を匿名化）
+    // _names.enc に表示名マッピングを追加してモバイルでも名前解決できるようにする
     if (isPrivatePath(relName) && !relName.startsWith('private/_')) {
       const basename = path.basename(relName);
       if (!/^\d{13,}\.md$/.test(basename)) {
-        relName = `private/${Date.now()}.md`;
+        const displayName = basename.replace(/\.md$/i, '');
+        const timestampFilename = `${Date.now()}.md`;
+        relName = `private/${timestampFilename}`;
+        // _names.enc を非同期で更新（失敗しても保存自体は続行）
+        if (vaultPassword) {
+          updatePrivateNamesEnc(notesPath, timestampFilename, displayName).catch(err =>
+            console.error('_names.enc update failed:', err.message)
+          );
+        }
       }
     }
 
