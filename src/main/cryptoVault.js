@@ -54,7 +54,8 @@ function decrypt(formatted, password) {
   if (!isEncrypted(formatted)) {
     throw new Error('Not an encrypted payload');
   }
-  const lines = formatted.split('\n');
+  // git autocrlf で \r\n になる場合があるので正規化
+  const lines = formatted.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   const fields = {};
   for (const line of lines) {
     const m = line.match(/^(salt|iv|tag|data):\s*(.+)$/);
@@ -94,7 +95,8 @@ async function decryptAsync(formatted, password) {
   if (!isEncrypted(formatted)) {
     throw new Error('Not an encrypted payload');
   }
-  const lines = formatted.split('\n');
+  // git autocrlf で \r\n になる場合があるので正規化
+  const lines = formatted.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   const fields = {};
   for (const line of lines) {
     const m = line.match(/^(salt|iv|tag|data):\s*(.+)$/);
