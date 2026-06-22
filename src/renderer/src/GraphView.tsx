@@ -60,6 +60,12 @@ function noteId(note: Note) {
   return note.name.replace(/\.md$/i, '');
 }
 
+// グラフ表示用ラベル: フォルダパスを除去しファイル名のみ、長い場合は省略
+function displayLabel(rawId: string, maxLen = 20): string {
+  const base = rawId.split('/').pop() ?? rawId;
+  return base.length > maxLen ? base.slice(0, maxLen) + '…' : base;
+}
+
 function parseFrontmatterTags(content: string): string[] {
   const tags: string[] = [];
   const lines = content.split('\n');
@@ -317,7 +323,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       }
 
       g.addNode(id, {
-        label: id,
+        label: displayLabel(id),
         size: settings.nodeSize * 8,
         color: color,
         updatedAt: note.updatedAt,
@@ -348,7 +354,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         }
 
         g.addNode(tagNodeId, {
-          label: tagNodeId,
+          label: displayLabel(tagNodeId),
           size: settings.nodeSize * 6,
           color: color,
         });
@@ -378,7 +384,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
           // 存在しない（空のリンク）だがフィルタを通過したノードを追加
           let color = '#475569';
           g.addNode(target, {
-            label: target,
+            label: displayLabel(target),
             size: settings.nodeSize * 5,
             color: color,
           });
@@ -1192,7 +1198,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
               const screenPos = nodeInfo.pos.clone().project(camera);
               const x = (screenPos.x * 0.5 + 0.5) * width;
               const y = (-(screenPos.y * 0.5) + 0.5) * height;
-              el.textContent = nodeInfo.name;
+              el.textContent = displayLabel(nodeInfo.name);
               el.style.display = 'block';
               el.style.left = `${x}px`;
               el.style.top = `${y - 10}px`;
