@@ -183,10 +183,11 @@ export default function App() {
         return {
           ...buildNote(r.name, existing?.content ?? '', r.updatedAt),
           remotePath: r.remotePath,
-          // 既存の sha（fetchNoteContentFromGitHub で取得済みの値）を優先
+          // 既存の sha・displayName を優先（fetch済みの値を保持）
           sha: existing?.sha || r.sha,
           favorite: existing?.favorite,
           archived: existing?.archived,
+          displayName: existing?.displayName,
         } as Note;
       });
     });
@@ -316,8 +317,11 @@ export default function App() {
     if (Object.keys(names).length === 0) return;
     setNotes(prev => prev.map(n => {
       const remoteName = (n.remotePath ?? '').split('/').pop() ?? '';
-      const displayName = names[remoteName];
-      return displayName ? { ...n, displayName } : n;
+      const rawDisplayName = names[remoteName];
+      if (!rawDisplayName) return n;
+      // 拡張子を除いたタイトルに正規化
+      const displayName = rawDisplayName.replace(/\.md$/i, '');
+      return { ...n, displayName };
     }));
   }
 
@@ -443,7 +447,7 @@ export default function App() {
     if (config.gitRemoteUrl && isPrivate) {
       const url = config.gitRemoteUrl;
       loadPrivateNamesFromGitHub(url).then(existing => {
-        const updated = { ...existing, [privateTimestampName]: name };
+        const updated = { ...existing, [privateTimestampName]: noteTitle(name) };
         return savePrivateNamesToGitHub(url, updated);
       }).catch(console.error);
     }

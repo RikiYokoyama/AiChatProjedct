@@ -287,6 +287,7 @@ export default function App() {
   const [mocAiMode, setMocAiMode] = useState(false);
   const [mocFilterType, setMocFilterType] = useState<'all' | 'folder' | 'tag'>('all');
   const [mocFilterValue, setMocFilterValue] = useState('');
+  const [mocUpdateSuccess, setMocUpdateSuccess] = useState(false);
 
   const allFolders = useMemo(() => {
     const set = new Set<string>();
@@ -724,7 +725,7 @@ export default function App() {
     return map;
   }, [notes]);
 
-  async function generateAutoMoc(list: any[]) {
+  async function generateAutoMoc(list: any[], force = false) {
     try {
       const targetFilename = 'moc/_All_Notes_MOC.md';
       
@@ -781,7 +782,7 @@ export default function App() {
       const cleanBody = body.replace(/作成日時:[^\n]*\n?/m, '').trim();
       const cleanExisting = existingContent.replace(/作成日時:[^\n]*\n?/m, '').trim();
 
-      if (cleanBody !== cleanExisting) {
+      if (force || cleanBody !== cleanExisting) {
         await window.electronAPI.saveNote({ filename: targetFilename, content: body });
       }
     } catch (err) {
@@ -906,6 +907,8 @@ export default function App() {
     setRibbonView('notes');
     setShowVaultUnlock(false);
     setVaultPwInput('');
+    // 解除後にノートを再スキャン → private/ファイルを復号してdisplayNameを取得
+    await loadNotesList();
     const pending = pendingPrivateNote;
     setPendingPrivateNote(null);
     if (pending) await openNote(pending);
@@ -933,6 +936,7 @@ export default function App() {
     setShowVaultSetup(false);
     setVaultPwInput('');
     setVaultPwInput2('');
+    await loadNotesList();
   }
 
   // 保管庫: 手動ロック（通常一覧へ戻す）
@@ -967,7 +971,7 @@ export default function App() {
     }
     await loadNotesList();
     const savedName = result.name ?? name;
-    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
+    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
     setRibbonView('notes');
     setEditMode('edit');
@@ -1045,7 +1049,7 @@ export default function App() {
     setNewNoteName('Untitled');
     await loadNotesList();
     const savedName = result.name ?? name;
-    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
+    const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
 
     if (!isAiNoteMode || !config.geminiApiKey) {
@@ -1393,23 +1397,22 @@ export default function App() {
       alert(result.error ?? '削除に失敗しました');
       return;
     }
-    // 削除したノートのタブを閉じる処理をシミュレート
     const tabName = selectedNote.name;
-    setOpenTabs((prev) => {
-      const idx = prev.findIndex((t) => t.name === tabName);
-      const next = prev.filter((t) => t.name !== tabName);
-      const fallback = next[Math.max(0, idx - 1)] ?? next[0] ?? null;
-      if (fallback) {
-        openNote(fallback);
-      } else {
-        setSelectedNote(null);
-        setContent('');
-        setNoteContext(null);
-        setChatHistory([]);
-        setStreamedText('');
-      }
-      return next;
-    });
+    const idx = openTabs.findIndex((t) => t.name === tabName);
+    const nextTabs = openTabs.filter((t) => t.name !== tabName);
+    const fallback = nextTabs[Math.max(0, idx - 1)] ?? nextTabs[0] ?? null;
+
+    setOpenTabs(nextTabs);
+
+    if (fallback) {
+      await openNote(fallback);
+    } else {
+      setSelectedNote(null);
+      setContent('');
+      setNoteContext(null);
+      setChatHistory([]);
+      setStreamedText('');
+    }
     await loadNotesList();
   }
 
@@ -2929,6 +2932,21 @@ export default function App() {
                 キャンセル
               </button>
             </div>
+
+            <div className="mt-5 border-t border-white/10 pt-4 text-xs">
+              <span className="mb-2 block text-gray-400 font-semibold">その他</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  await generateAutoMoc(notes, true); // force=trueで強制上書き
+                  setMocUpdateSuccess(true);
+                  setTimeout(() => setMocUpdateSuccess(false), 2000);
+                }}
+                className="w-full rounded border border-indigo-500/30 bg-indigo-500/10 py-2 font-semibold text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+              >
+                {mocUpdateSuccess ? '✓ 全自動目次を更新しました！' : '🔄 全自動目次（_All_Notes_MOC.md）を今すぐ再更新'}
+              </button>
+            </div>
           </form>
         </div>
       )}
@@ -3080,12 +3098,15 @@ export default function App() {
                 return;
               }
               const tabName = contextMenu.note.name;
-              setOpenTabs((prev) => {
-                const idx = prev.findIndex((t) => t.name === tabName);
-                const next = prev.filter((t) => t.name !== tabName);
-                const fallback = next[Math.max(0, idx - 1)] ?? next[0] ?? null;
+              const idx = openTabs.findIndex((t) => t.name === tabName);
+              const nextTabs = openTabs.filter((t) => t.name !== tabName);
+              const fallback = nextTabs[Math.max(0, idx - 1)] ?? nextTabs[0] ?? null;
+
+              setOpenTabs(nextTabs);
+
+              if (selectedNote?.name === tabName) {
                 if (fallback) {
-                  openNote(fallback);
+                  await openNote(fallback);
                 } else {
                   setSelectedNote(null);
                   setContent('');
@@ -3093,8 +3114,7 @@ export default function App() {
                   setChatHistory([]);
                   setStreamedText('');
                 }
-                return next;
-              });
+              }
               await loadNotesList();
             }}
           >
