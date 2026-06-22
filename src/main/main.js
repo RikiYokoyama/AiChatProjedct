@@ -607,19 +607,21 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
             const relativePath = path.relative(basePath, filePath).replace(/\\/g, '/');
             const mtimeStr = stat.mtime.toISOString();
 
-            // private/ 配下はキャッシュ不使用。ロック解除中は復号してdisplayNameを取得
+            // private/ 配下はキャッシュ不使用。ロック解除中は非同期復号してdisplayNameを取得
             if (isPrivatePath(relativePath)) {
               let displayName = null, tags = [], createdAt = null;
               if (vaultPassword) {
                 try {
                   const rawContent = await fs.promises.readFile(filePath, 'utf8');
                   if (cryptoVault.isEncrypted(rawContent)) {
-                    const decrypted = cryptoVault.decrypt(rawContent, vaultPassword);
+                    const decrypted = await cryptoVault.decryptAsync(rawContent, vaultPassword);
                     displayName = decrypted.split('\n')[0].replace(/^#+\s*/, '').trim() || null;
                     tags = extractTags(decrypted);
                     createdAt = extractCreatedAt(decrypted);
                   }
-                } catch { /* 復号失敗は無視 */ }
+                } catch (err) {
+                  console.error(`Private decrypt failed (${relativePath}):`, err.message);
+                }
               }
               results.push({ name: relativePath, path: filePath, updatedAt: createdAt ?? mtimeStr, displayName, content: '', tags, wikiLinks: [], isEmpty: false });
               return;
@@ -698,10 +700,15 @@ ipcMain.handle('read-note', async (event, filename) => {
       throw new Error('File not found');
     }
     let content = await fs.promises.readFile(filePath, 'utf8');
-    // private/ 配下の暗号化ノートは復号して返す
+    // private/ 配下の暗号化ノートは非同期復号して返す
     if (isPrivatePath(filename) && cryptoVault.isEncrypted(content)) {
       if (!vaultPassword) throw new Error('VAULT_LOCKED');
-      content = cryptoVault.decrypt(content, vaultPassword);
+      try {
+        content = await cryptoVault.decryptAsync(content, vaultPassword);
+      } catch (decErr) {
+        console.error('Decrypt error in read-note:', decErr.message);
+        throw new Error('復号に失敗しました: ' + decErr.message);
+      }
       refreshVaultAutoLock();
     }
     return content;

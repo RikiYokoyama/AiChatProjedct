@@ -442,7 +442,10 @@ export default function App() {
     }
 
     // state に直接追加（refreshNotes は _index.json が古いため不可）
-    const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha, displayName: noteTitle(name) };
+    // private ノートは name をタイムスタンプID（GitHub ファイル名と一致させる）+ displayName に人間が読める名前を保持
+    const newNote: Note = isPrivate
+      ? { ...buildNote(name, initial), name: privateTimestampName, remotePath, sha: newSha, displayName: noteTitle(name) }
+      : { ...buildNote(name, initial), remotePath, sha: newSha };
     // private: _names.enc にファイル名→表示名を登録
     if (config.gitRemoteUrl && isPrivate) {
       const url = config.gitRemoteUrl;

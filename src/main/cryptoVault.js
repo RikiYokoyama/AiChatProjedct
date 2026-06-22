@@ -10,9 +10,18 @@ const SALT_BYTES = 16;
 const IV_BYTES = 12;
 const KEY_BYTES = 32; // AES-256
 
-// パスワード + ソルトから鍵を導出
+// パスワード + ソルトから鍵を導出（同期）
 function deriveKey(password, salt) {
   return crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, KEY_BYTES, 'sha256');
+}
+
+// パスワード + ソルトから鍵を導出（非同期 - メインプロセスをブロックしない）
+function deriveKeyAsync(password, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, PBKDF2_ITERATIONS, KEY_BYTES, 'sha256', (err, key) => {
+      if (err) reject(err); else resolve(key);
+    });
+  });
 }
 
 // 平文を暗号化し、保存用フォーマット文字列を返す
@@ -80,9 +89,35 @@ function verifyPassword(token, password) {
   }
 }
 
+// 暗号文を非同期で復号（メインプロセスのブロック防止用）
+async function decryptAsync(formatted, password) {
+  if (!isEncrypted(formatted)) {
+    throw new Error('Not an encrypted payload');
+  }
+  const lines = formatted.split('\n');
+  const fields = {};
+  for (const line of lines) {
+    const m = line.match(/^(salt|iv|tag|data):\s*(.+)$/);
+    if (m) fields[m[1]] = m[2].trim();
+  }
+  if (!fields.salt || !fields.iv || !fields.tag || !fields.data) {
+    throw new Error('Malformed encrypted payload');
+  }
+  const salt = Buffer.from(fields.salt, 'base64');
+  const iv = Buffer.from(fields.iv, 'base64');
+  const tag = Buffer.from(fields.tag, 'base64');
+  const data = Buffer.from(fields.data, 'base64');
+  const key = await deriveKeyAsync(password, salt);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
+  return decrypted.toString('utf8');
+}
+
 module.exports = {
   encrypt,
   decrypt,
+  decryptAsync,
   isEncrypted,
   createVerifyToken,
   verifyPassword,
