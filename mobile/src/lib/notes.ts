@@ -8,6 +8,7 @@ export interface Note {
   archived?: boolean;
   remotePath?: string; // GitHub上のパス (例: notes/ファイル.md)
   sha?: string;        // GitHub blob SHA（更新・削除用）
+  displayName?: string; // private/ ノートの表示名（暗号化コンテンツから取得）
 }
 
 export function cleanFilename(value: string) {

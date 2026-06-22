@@ -486,6 +486,35 @@ export async function unlockVaultFromGitHub(gitRemoteUrl: string, password: stri
   return ok;
 }
 
+/** private/_names.enc からファイル名→表示名マッピングを読み込む（ロック解除中のみ） */
+export async function loadPrivateNamesFromGitHub(gitRemoteUrl: string): Promise<Record<string, string>> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo || !vaultPassword) return {};
+  try {
+    const sync = new GitHubSync(token, repo, branch);
+    const file = await sync.fetchRemoteFile('private/_names.enc');
+    if (!vaultIsEncrypted(file.content)) return {};
+    const json = await vaultDecrypt(file.content, vaultPassword);
+    return JSON.parse(json) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+/** private/_names.enc にファイル名→表示名マッピングを保存 */
+export async function savePrivateNamesToGitHub(gitRemoteUrl: string, names: Record<string, string>): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo || !vaultPassword) return;
+  const encrypted = await vaultEncrypt(JSON.stringify(names), vaultPassword);
+  const sync = new GitHubSync(token, repo, branch);
+  try {
+    const existing = await sync.fetchRemoteFile('private/_names.enc');
+    await sync.putFile('private/_names.enc', encrypted, existing.sha);
+  } catch {
+    await sync.putFile('private/_names.enc', encrypted);
+  }
+}
+
 /** 現在の年月を "YYYY-MM" 形式で返す */
 export function currentYearMonth(): string {
   return new Date().toISOString().slice(0, 7);

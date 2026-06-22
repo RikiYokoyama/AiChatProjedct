@@ -606,28 +606,41 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
           } else if (file.endsWith('.md')) {
             const relativePath = path.relative(basePath, filePath).replace(/\\/g, '/');
             const mtimeStr = stat.mtime.toISOString();
-            
+
+            // private/ 配下はキャッシュ不使用。ロック解除中は復号してdisplayNameを取得
+            if (isPrivatePath(relativePath)) {
+              let displayName = null, tags = [], createdAt = null;
+              if (vaultPassword) {
+                try {
+                  const rawContent = await fs.promises.readFile(filePath, 'utf8');
+                  if (cryptoVault.isEncrypted(rawContent)) {
+                    const decrypted = cryptoVault.decrypt(rawContent, vaultPassword);
+                    displayName = decrypted.split('\n')[0].replace(/^#+\s*/, '').trim() || null;
+                    tags = extractTags(decrypted);
+                    createdAt = extractCreatedAt(decrypted);
+                  }
+                } catch { /* 復号失敗は無視 */ }
+              }
+              results.push({ name: relativePath, path: filePath, updatedAt: createdAt ?? mtimeStr, displayName, content: '', tags, wikiLinks: [], isEmpty: false });
+              return;
+            }
+
             let cached = cache[relativePath];
             if (!cached || cached.updatedAt !== mtimeStr) {
-              // private/ 配下は暗号文なのでメタデータ解析しない（情報漏洩防止）
-              if (isPrivatePath(relativePath)) {
-                cached = { updatedAt: mtimeStr, createdAt: null, tags: [], wikiLinks: [], isEmpty: false };
-              } else {
-                let content = '';
-                try {
-                  content = await fs.promises.readFile(filePath, 'utf8');
-                } catch (err) {
-                  console.error(err);
-                }
-                const tags = extractTags(content);
-                const wikiLinks = extractWikiLinks(content);
-                const isEmpty = content.split('\n').filter((l) => {
-                  const t = l.trim();
-                  return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
-                }).length === 0;
-                const createdAt = extractCreatedAt(content);
-                cached = { updatedAt: mtimeStr, createdAt, tags, wikiLinks, isEmpty };
+              let content = '';
+              try {
+                content = await fs.promises.readFile(filePath, 'utf8');
+              } catch (err) {
+                console.error(err);
               }
+              const tags = extractTags(content);
+              const wikiLinks = extractWikiLinks(content);
+              const isEmpty = content.split('\n').filter((l) => {
+                const t = l.trim();
+                return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
+              }).length === 0;
+              const createdAt = extractCreatedAt(content);
+              cached = { updatedAt: mtimeStr, createdAt, tags, wikiLinks, isEmpty };
               cache[relativePath] = cached;
               cacheUpdated.value = true;
             }
@@ -711,6 +724,14 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
     if (!relName.includes('/') && !relName.includes('\\')) {
       const ym = yearMonthFromContent(content);
       relName = `notes/${ym}/${relName}`;
+    }
+
+    // private/ の新規ファイルはタイムスタンプIDで保存（GitHub上でファイル名を匿名化）
+    if (isPrivatePath(relName) && !relName.startsWith('private/_')) {
+      const basename = path.basename(relName);
+      if (!/^\d{13,}\.md$/.test(basename)) {
+        relName = `private/${Date.now()}.md`;
+      }
     }
 
     const filePath = resolveNotePath(notesPath, relName);

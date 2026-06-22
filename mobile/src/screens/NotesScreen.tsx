@@ -207,7 +207,7 @@ export default function FilesScreen({
                 }`}
               >
                 <FileText className="h-3 w-3 shrink-0" />
-                <span className="truncate">{noteTitle(note.name)}</span>
+                <span className="truncate">{note.displayName ?? noteTitle(note.name)}</span>
               </button>
             ))}
           </div>

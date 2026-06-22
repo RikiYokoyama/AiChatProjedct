@@ -53,6 +53,8 @@ import {
   vaultExistsOnGitHub,
   setupVaultOnGitHub,
   unlockVaultFromGitHub,
+  loadPrivateNamesFromGitHub,
+  savePrivateNamesToGitHub,
 } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
@@ -309,6 +311,16 @@ export default function App() {
   }, []);
 
   // ---------- 保管庫 ----------
+  async function applyPrivateDisplayNames(url: string) {
+    const names = await loadPrivateNamesFromGitHub(url).catch(() => ({} as Record<string, string>));
+    if (Object.keys(names).length === 0) return;
+    setNotes(prev => prev.map(n => {
+      const remoteName = (n.remotePath ?? '').split('/').pop() ?? '';
+      const displayName = names[remoteName];
+      return displayName ? { ...n, displayName } : n;
+    }));
+  }
+
   async function handleVaultUnlock() {
     setVaultError('');
     const cfg = configRef.current;
@@ -320,6 +332,7 @@ export default function App() {
       setPrivateMode(true);
       setVaultModal(null);
       setVaultPw('');
+      applyPrivateDisplayNames(cfg.gitRemoteUrl).catch(console.error);
       const pending = pendingPrivateNote;
       setPendingPrivateNote(null);
       if (pending) selectNoteForNoteTab(pending);
@@ -371,7 +384,12 @@ export default function App() {
     if (!cfg.gitRemoteUrl) return false;
     try {
       const ok = await unlockVaultFromGitHub(cfg.gitRemoteUrl, query);
-      if (ok) { setVaultUnlocked(true); setPrivateMode(true); return true; }
+      if (ok) {
+        setVaultUnlocked(true);
+        setPrivateMode(true);
+        applyPrivateDisplayNames(cfg.gitRemoteUrl).catch(console.error);
+        return true;
+      }
     } catch { /* 失敗時は通常検索として扱う */ }
     return false;
   }
@@ -404,7 +422,9 @@ export default function App() {
     const ym = currentYearMonth();
     // プライベート表示中に作成したノートは暗号化保管庫(private/)へ
     const isPrivate = privateMode;
-    const remotePath = isPrivate ? `private/${name}` : `notes/${ym}/${name}`;
+    // private/ はタイムスタンプIDで保存（GitHub上でファイル名を匿名化）
+    const privateTimestampName = `${Date.now()}.md`;
+    const remotePath = isPrivate ? `private/${privateTimestampName}` : `notes/${ym}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -418,7 +438,15 @@ export default function App() {
     }
 
     // state に直接追加（refreshNotes は _index.json が古いため不可）
-    const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
+    const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha, displayName: noteTitle(name) };
+    // private: _names.enc にファイル名→表示名を登録
+    if (config.gitRemoteUrl && isPrivate) {
+      const url = config.gitRemoteUrl;
+      loadPrivateNamesFromGitHub(url).then(existing => {
+        const updated = { ...existing, [privateTimestampName]: name };
+        return savePrivateNamesToGitHub(url, updated);
+      }).catch(console.error);
+    }
     // _index.json と moc/moc.md を非同期で更新（private は公開MOCに載せない）
     if (config.gitRemoteUrl && !isPrivate) {
       const url = config.gitRemoteUrl;

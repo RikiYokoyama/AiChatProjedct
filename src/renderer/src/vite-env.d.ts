@@ -31,6 +31,7 @@ interface Window {
       content: string;
       tags?: string[];
       wikiLinks?: string[];
+      displayName?: string;
     }>>;
     readNote: (filename: string) => Promise<string>;
     saveNote: (data: { filename: string; content: string }) => Promise<{ success: boolean; path?: string; name?: string; error?: string }>;

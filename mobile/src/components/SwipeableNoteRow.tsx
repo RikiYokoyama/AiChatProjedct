@@ -120,7 +120,7 @@ export default function SwipeableNoteRow({
           <div className="flex items-center gap-1.5">
             {isFavorite && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />}
             <span className={`truncate text-sm ${isActive ? 'font-semibold text-indigo-100' : 'text-gray-200'}`}>
-              {noteTitle(note.name)}
+              {note.displayName ?? noteTitle(note.name)}
             </span>
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">

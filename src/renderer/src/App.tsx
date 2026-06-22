@@ -56,6 +56,7 @@ interface Note {
   tags?: string[];
   wikiLinks?: string[];
   isEmpty?: boolean;
+  displayName?: string;
 }
 
 interface AppConfig {
@@ -133,7 +134,11 @@ function buildFileTree(notes: Note[]): Record<string, Note[]> {
 
 function cleanFilename(value: string) {
   const name = value.trim().replace(/[\\/:*?"<>|]/g, '-');
-  return name.endsWith('.md') ? name : `${name || 'Untitled'}.md`;
+  let base = name.replace(/\.md$/i, '');
+  if (base.length > 50) {
+    base = base.slice(0, 50); // 最大50文字に切り詰め
+  }
+  return `${base || 'Untitled'}.md`;
 }
 
 function RibbonButton({
@@ -192,7 +197,7 @@ function SortableTab({
         }`}
     >
       <FileText className="h-3 w-3 shrink-0" />
-      <span className="truncate">{note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
+      <span className="truncate">{note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
       <button
         onClick={onClose}
         className="ml-0.5 hidden shrink-0 rounded p-0.5 hover:bg-white/20 group-hover:flex"
@@ -280,6 +285,24 @@ export default function App() {
   const [showMocModal, setShowMocModal] = useState(false);
   const [mocTitle, setMocTitle] = useState('');
   const [mocAiMode, setMocAiMode] = useState(false);
+  const [mocFilterType, setMocFilterType] = useState<'all' | 'folder' | 'tag'>('all');
+  const [mocFilterValue, setMocFilterValue] = useState('');
+
+  const allFolders = useMemo(() => {
+    const set = new Set<string>();
+    notes.forEach((n) => {
+      const parts = n.name.split('/');
+      if (parts.length > 1) {
+        // 全自動MOC（moc/）やprivate/は対象外とする
+        const parent = parts.slice(0, -1).join('/');
+        if (!parent.startsWith('moc') && !parent.startsWith('private') && !parent.startsWith('_')) {
+          set.add(parent);
+        }
+      }
+    });
+    return Array.from(set).sort();
+  }, [notes]);
+
   const [isMocGenerating, setIsMocGenerating] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -305,6 +328,13 @@ export default function App() {
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewDivRef = useRef<HTMLDivElement>(null);
+
+  // 編集モードに切り替わったときに自動でフォーカスを当てる
+  useEffect(() => {
+    if (editMode === 'edit' && editorRef.current) {
+      editorRef.current.focus();
+    }
+  }, [editMode, selectedNote?.name]);
 
   const wrapSelectionWithWikiLink = useCallback(() => {
     const textarea = editorRef.current;
@@ -398,6 +428,18 @@ export default function App() {
 
   const preprocessContent = (text: string) => replaceUserAiWithHr(preprocessWikiLinks(text));
 
+  const renderContent = useMemo(() => {
+    if (!content) return '';
+    const lines = content.split('\n');
+    if (lines.length > 500) {
+      return preprocessContent(
+        lines.slice(0, 500).join('\n') + 
+        `\n\n---\n> [!WARNING]\n> ノートの行数が多いため（${lines.length}行）、表示負荷軽減のためにプレビューを先頭の500行に制限しています。全件を確認・編集するには、右上の「編集」ボタンを押してください。`
+      );
+    }
+    return preprocessContent(content);
+  }, [content]);
+
   const createNewWikiNote = async (noteName: string) => {
     let filename = noteName;
     if (!filename.endsWith('.md')) {
@@ -429,18 +471,71 @@ export default function App() {
   };
 
   const handleWikiLinkClick = async (noteName: string) => {
-    let targetFilename = noteName;
+    // デコードし、両端の不要な空白や記号（全角カッコなど）を取り除く
+    let cleanTargetName = decodeURIComponent(noteName)
+      .trim()
+      .replace(/^[「『\"'‘“]+|[」』\"'’”]+$/g, ''); // 囲みカッコのゴミ掃除
+
+    let targetFilename = cleanTargetName;
     if (!targetFilename.endsWith('.md')) {
       targetFilename += '.md';
     }
 
-    const targetNote = notes.find((n) => n.name.toLowerCase() === targetFilename.toLowerCase());
+    const norm = (str: string) => str.toLowerCase().replace(/[\s\-_]/g, ''); // 空白やハイフンを除去して比較用
+
+    // 1. 完全一致で探す
+    let targetNote = notes.find((n) => n.name.toLowerCase() === targetFilename.toLowerCase());
+
+    // 2. パスを含めた曖昧一致（空白無視など）
+    if (!targetNote) {
+      targetNote = notes.find((n) => norm(n.name) === norm(targetFilename));
+    }
+
+    // 3. ファイル名単体での曖昧一致（末尾のファイル名が一致するか）
+    if (!targetNote) {
+      const targetBase = targetFilename.split(/[\/\\]/).pop() ?? '';
+      const normTargetBase = norm(targetBase);
+
+      targetNote = notes.find((n) => {
+        const noteBase = n.name.split(/[\/\\]/).pop() ?? '';
+        return norm(noteBase) === normTargetBase;
+      });
+    }
+
+    // 4. 部分一致（最終フォールバック：入力された名前がノート名に含まれる、またはその逆）
+    if (!targetNote) {
+      const targetBase = targetFilename.split(/[\/\\]/).pop()?.replace(/\.md$/i, '') ?? '';
+      const normTargetBase = norm(targetBase);
+
+      if (normTargetBase.length >= 2) { // 2文字以上の場合のみ部分一致を適用
+        targetNote = notes.find((n) => {
+          const noteBase = n.name.split(/[\/\\]/).pop()?.replace(/\.md$/i, '') ?? '';
+          const normNoteBase = norm(noteBase);
+          return normNoteBase.includes(normTargetBase) || normTargetBase.includes(normNoteBase);
+        });
+      }
+    }
+
+    // 5. 前方一致（長いファイル名が途中で切れてしまっている場合の救済措置）
+    if (!targetNote) {
+      const targetBase = targetFilename.split(/[\/\\]/).pop()?.replace(/\.md$/i, '') ?? '';
+      const normTargetBase = norm(targetBase);
+
+      if (normTargetBase.length >= 8) { // 8文字以上の十分な長さがある場合
+        targetNote = notes.find((n) => {
+          const noteBase = n.name.split(/[\/\\]/).pop()?.replace(/\.md$/i, '') ?? '';
+          const normNoteBase = norm(noteBase);
+          return normNoteBase.startsWith(normTargetBase) || normTargetBase.startsWith(normNoteBase);
+        });
+      }
+    }
+
     if (targetNote) {
       openNote(targetNote);
     } else {
-      const confirmCreate = window.confirm(`ノート "${noteName}" は存在しません。新しく作成しますか？`);
+      const confirmCreate = window.confirm(`ノート "${cleanTargetName}" は存在しません。新しく作成しますか？`);
       if (confirmCreate) {
-        await createNewWikiNote(noteName);
+        await createNewWikiNote(cleanTargetName);
       }
     }
   };
@@ -460,6 +555,7 @@ export default function App() {
   const allTagsMap = useMemo(() => {
     const map: Record<string, Note[]> = {};
     for (const note of notes) {
+      if (note.name === 'moc/_All_Notes_MOC.md') continue;
       const tags = note.tags || [];
       for (const tag of tags) {
         if (!map[tag]) {
@@ -474,7 +570,8 @@ export default function App() {
   const filteredNotes = useMemo(() => {
     // privateMode=true ならprivate専用一覧、それ以外は通常（private除外）
     let result = notes.filter((n) =>
-      privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')
+      (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) &&
+      n.name !== 'moc/_All_Notes_MOC.md'
     );
     // タグ絞り込み（コンボボックス）
     if (tagFilter) {
@@ -541,11 +638,11 @@ export default function App() {
     } else if (queryLower.startsWith('link:')) {
       const val = query.substring(5).trim().toLowerCase();
       return notes
-        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name.toLowerCase().includes(val))
+        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name !== 'moc/_All_Notes_MOC.md' && n.name.toLowerCase().includes(val))
         .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     } else {
       return notes
-        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name.toLowerCase().includes(queryLower))
+        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name !== 'moc/_All_Notes_MOC.md' && n.name.toLowerCase().includes(queryLower))
         .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
     }
   }, [notes, searchQuery, allTagsMap, privateMode]);
@@ -627,6 +724,71 @@ export default function App() {
     return map;
   }, [notes]);
 
+  async function generateAutoMoc(list: any[]) {
+    try {
+      const targetFilename = 'moc/_All_Notes_MOC.md';
+      
+      // 自身とプライベートノートおよび非表示系ファイルを除外
+      const filtered = list.filter(
+        (n) =>
+          n.name !== targetFilename &&
+          !n.name.startsWith('private/') &&
+          !n.name.startsWith('_')
+      );
+
+      // フォルダごとにノートをグループ化する
+      const groups: Record<string, any[]> = {};
+      for (const note of filtered) {
+        const parts = note.name.split('/');
+        let folder = 'ルート';
+        if (parts.length > 1) {
+          folder = parts.slice(0, -1).join('/');
+        }
+        if (!groups[folder]) {
+          groups[folder] = [];
+        }
+        groups[folder].push(note);
+      }
+
+      const now = new Date();
+      const formatted = `${now.getFullYear()}/${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+      let body = `# 全ノート目次 (自動更新)\n作成日時: ${formatted}\n\n`;
+      body += `> [!NOTE]\n> このファイルはアプリによって自動更新されます。手動で編集した内容は上書きされるのでご注意ください。\n\n`;
+
+      const folders = Object.keys(groups).sort();
+      for (const folder of folders) {
+        body += `## 📁 フォルダ: ${folder}\n`;
+        const sortedNotes = groups[folder].sort((a, b) => a.name.localeCompare(b.name));
+        for (const note of sortedNotes) {
+          const displayName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+          body += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]\n`;
+        }
+        body += `\n`;
+      }
+
+      // 現在の _All_Notes_MOC.md の内容を取得して比較する（無限ループ防止）
+      const existingMoc = list.find((n) => n.name === targetFilename);
+      let existingContent = '';
+      if (existingMoc) {
+        try {
+          existingContent = await window.electronAPI.readNote(targetFilename);
+        } catch (e) {
+          // ファイルがない場合は空文字
+        }
+      }
+
+      const cleanBody = body.replace(/作成日時:[^\n]*\n?/m, '').trim();
+      const cleanExisting = existingContent.replace(/作成日時:[^\n]*\n?/m, '').trim();
+
+      if (cleanBody !== cleanExisting) {
+        await window.electronAPI.saveNote({ filename: targetFilename, content: body });
+      }
+    } catch (err) {
+      console.error('Failed to generate auto MOC:', err);
+    }
+  }
+
   async function loadNotesList() {
     setIsLoading(true);
     try {
@@ -642,6 +804,8 @@ export default function App() {
         const updated = list.find((n) => n.name === selectedNote.name);
         setSelectedNote(updated ?? null);
       }
+      // バックグラウンドで全自動MOCを更新
+      generateAutoMoc(list);
     } finally {
       setIsLoading(false);
     }
@@ -895,9 +1059,61 @@ export default function App() {
     setContent(accumulatedText);
     setStreamedText('下書き作成中...');
 
+    // 新規ノート作成時のMOC動的コンテキスト抽出
+    const activeNotesForNew = notes.filter(
+      (n) =>
+        n.name !== 'moc/_All_Notes_MOC.md' &&
+        !n.name.startsWith('private/') &&
+        !n.name.startsWith('_')
+    );
+
+    // タイトルからキーワードを抽出
+    const keywordsForNew = title.toLowerCase().match(/[a-z0-9_]{2,}|[\u4e00-\u9faf]+|[\u30a0-\u30ff]{2,}/g) || [];
+
+    const scoredNotesForNew = activeNotesForNew.map((note) => {
+      let score = 0;
+      const nameLower = note.name.toLowerCase();
+      const tags = (note.tags || []).map(t => t.toLowerCase());
+
+      for (const word of keywordsForNew) {
+        if (nameLower.includes(word)) {
+          score += 10;
+        }
+        for (const tag of tags) {
+          if (tag.includes(word)) {
+            score += 5;
+          }
+        }
+      }
+      return { note, score };
+    });
+
+    let matchedNotesForNew = scoredNotesForNew
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.note);
+
+    if (matchedNotesForNew.length === 0) {
+      matchedNotesForNew = activeNotesForNew
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, 30);
+    } else {
+      matchedNotesForNew = matchedNotesForNew.slice(0, 50);
+    }
+
+    let newMocContent = '';
+    if (matchedNotesForNew.length > 0) {
+      newMocContent = "関連する可能性のある既存ノートの一覧:\n";
+      for (const note of matchedNotesForNew) {
+        const displayName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+        const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
+        newMocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
+      }
+    }
+
     const client = new GeminiClient(config.geminiApiKey);
     await client.chatStream(
-      [{ role: 'user', content: `「${title}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。` }],
+      [{ role: 'user', content: `「${title}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇取りを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。` }],
       'long-explain',
       aiModelMode,
       null,
@@ -930,6 +1146,10 @@ export default function App() {
         setIsGenerating(false);
         setStreamedText('');
         alert(error instanceof Error ? error.message : String(error));
+      },
+      {
+        contextLimit: 12000,
+        mocContext: newMocContent
       }
     );
   }
@@ -949,8 +1169,15 @@ export default function App() {
     if (mocAiMode && config.geminiApiKey) {
       setIsMocGenerating(true);
       try {
-        const noteInfos: NoteInfo[] = notes
-          .filter(n => !n.name.startsWith('moc/') && !n.name.startsWith('_'))
+        let filteredNotes = notes.filter(n => !n.name.startsWith('moc/') && !n.name.startsWith('_') && !n.name.startsWith('private/'));
+
+        if (mocFilterType === 'folder' && mocFilterValue) {
+          filteredNotes = filteredNotes.filter(n => n.name.startsWith(mocFilterValue + '/'));
+        } else if (mocFilterType === 'tag' && mocFilterValue) {
+          filteredNotes = filteredNotes.filter(n => (n.tags ?? []).includes(mocFilterValue));
+        }
+
+        const noteInfos: NoteInfo[] = filteredNotes
           .slice(0, 80) // API負荷軽減
           .map(n => ({
             name: n.name.replace(/^.*\//, '').replace(/\.md$/i, ''),
@@ -974,6 +1201,8 @@ export default function App() {
     setShowMocModal(false);
     setMocTitle('');
     setMocAiMode(false);
+    setMocFilterType('all');
+    setMocFilterValue('');
     await loadNotesList();
     const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: body };
     await openNote(note);
@@ -1371,6 +1600,71 @@ export default function App() {
     setStreamedText('');
     setIsGenerating(true);
 
+    // 対策3: ユーザーの質問に関連するノートだけを動的に絞り込んで送信する
+    const activeNotes = notes.filter(
+      (n) =>
+        n.name !== 'moc/_All_Notes_MOC.md' &&
+        !n.name.startsWith('private/') &&
+        !n.name.startsWith('_')
+    );
+
+    // 質問文から「英数字（2文字以上）」「漢字（1文字以上）」「カタカナ（2文字以上）」を抽出（ひらがな/助詞を除外してノイズ削減）
+    const words = prompt
+      .toLowerCase()
+      .match(/[a-z0-9_]{2,}|[\u4e00-\u9faf]+|[\u30a0-\u30ff]{2,}/g) || [];
+
+    const scoredNotes = activeNotes.map((note) => {
+      let score = 0;
+      const nameLower = note.name.toLowerCase();
+      const tags = (note.tags || []).map(t => t.toLowerCase());
+
+      for (const word of words) {
+        if (nameLower.includes(word)) {
+          score += 10; // タイトルに単語が含まれていれば高配点
+        }
+        for (const tag of tags) {
+          if (tag.includes(word)) {
+            score += 5; // タグに含まれていれば中配点
+          }
+        }
+      }
+      return { note, score };
+    });
+
+    let matchedNotes = scoredNotes
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.note);
+
+    const isFiltered = matchedNotes.length > 0;
+
+    if (!isFiltered) {
+      // 関連ノートがキーワードで見つからない場合は、直近更新されたノート30件をフォールバック
+      matchedNotes = activeNotes
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, 30);
+    } else {
+      matchedNotes = matchedNotes.slice(0, 50); // 最大50件に制限
+    }
+
+    // デバッグログ：実際にAIに送られているノートのリストをコンソールに出力
+    console.log("=== MOC 送信データ検証 ===");
+    console.log("入力プロンプト:", prompt);
+    console.log("抽出キーワード:", words);
+    console.log("関連マッチしたか:", isFiltered ? "はい" : "いいえ (直近30件をフォールバック送信)");
+    console.log("送信されたノート一覧:", matchedNotes.map(n => n.name));
+    console.log("==========================");
+
+    let mocContent = '';
+    if (matchedNotes.length > 0) {
+      mocContent = "関連する可能性のある既存ノートの一覧:\n";
+      for (const note of matchedNotes) {
+        const displayName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+        const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
+        mocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
+      }
+    }
+
     await client.chatStream(
       nextHistory,
       getSystemPrompt(chatMode),
@@ -1387,7 +1681,10 @@ export default function App() {
         setIsGenerating(false);
         alert(error instanceof Error ? error.message : String(error));
       },
-      chatMode === 'long-doc' ? { contextLimit: 100000 } : undefined,
+      {
+        contextLimit: chatMode === 'long-doc' ? 100000 : 12000,
+        mocContext: mocContent
+      },
     );
   }
 
@@ -1787,7 +2084,7 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-y-auto p-2 min-h-0">
                 {(() => {
-                  const tree = buildFileTree(notes.filter((n) => !n.name.startsWith('private/')));
+                  const tree = buildFileTree(notes.filter((n) => !n.name.startsWith('private/') && n.name !== 'moc/_All_Notes_MOC.md'));
                   const dirs = Object.keys(tree).sort();
                   return dirs.map((dir) => {
                     const dirNotes = tree[dir].slice().sort((a, b) => a.name.localeCompare(b.name));
@@ -1972,7 +2269,7 @@ export default function App() {
                         }}
                       >
                         <FileText className={`h-4 w-4 shrink-0 ${empty && selectedNote?.name !== note.name ? 'text-yellow-400' : ''}`} />
-                        <span className="truncate">{note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
+                        <span className="truncate">{note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
                       </button>
                     );
                   })
@@ -2129,6 +2426,7 @@ export default function App() {
             {selectedNote ? (
               editMode === 'edit' ? (
                 <textarea
+                  key={selectedNote?.name}
                   ref={editorRef}
                   className="h-full w-full resize-none bg-[#090d19] p-5 font-mono text-sm leading-7 text-gray-100 outline-none cursor-text"
                   value={content}
@@ -2196,7 +2494,7 @@ export default function App() {
                       }
                     }}
                   >
-                    {preprocessContent(content)}
+                    {renderContent}
                   </ReactMarkdown>
                 </div>
               )
@@ -2527,7 +2825,7 @@ export default function App() {
           <form className="w-full max-w-md rounded-lg border border-emerald-800/40 bg-[#101827] p-5 shadow-xl" onSubmit={createMocFromModal}>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-emerald-300">🗺 MOC作成</h2>
-              <button type="button" className="rounded p-2 hover:bg-white/10" onClick={() => { setShowMocModal(false); setMocTitle(''); setMocAiMode(false); }}>✕</button>
+              <button type="button" className="rounded p-2 hover:bg-white/10" onClick={() => { setShowMocModal(false); setMocTitle(''); setMocAiMode(false); setMocFilterType('all'); setMocFilterValue(''); }}>✕</button>
             </div>
             <label className="mb-3 block text-sm text-gray-300">
               MOCのタイトル
@@ -2549,9 +2847,75 @@ export default function App() {
               <span>AIで自動生成する（既存ノートを分析してリンクを作成）</span>
             </label>
             {mocAiMode && (
-              <p className="mb-4 rounded bg-emerald-900/30 px-3 py-2 text-xs text-emerald-400">
-                最大80件のノートをGeminiで分析し、テーマ別にグループ化したMOCを自動生成します。
-              </p>
+              <div className="mb-4 space-y-3 rounded border border-white/5 bg-white/5 p-3 text-xs">
+                <p className="text-emerald-400">
+                  最大80件のノートをGeminiで分析し、テーマ別にグループ化したMOCを自動生成します。
+                </p>
+                <div>
+                  <span className="mb-1 block text-gray-400">絞り込み条件</span>
+                  <div className="flex gap-2">
+                    <label className="flex items-center gap-1 text-gray-300 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="mocFilter"
+                        checked={mocFilterType === 'all'}
+                        onChange={() => { setMocFilterType('all'); setMocFilterValue(''); }}
+                      />
+                      <span>すべて</span>
+                    </label>
+                    <label className="flex items-center gap-1 text-gray-300 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="mocFilter"
+                        checked={mocFilterType === 'folder'}
+                        onChange={() => { setMocFilterType('folder'); setMocFilterValue(allFolders[0] || ''); }}
+                      />
+                      <span>フォルダ</span>
+                    </label>
+                    <label className="flex items-center gap-1 text-gray-300 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="mocFilter"
+                        checked={mocFilterType === 'tag'}
+                        onChange={() => { setMocFilterType('tag'); setMocFilterValue(masterTags[0] || ''); }}
+                      />
+                      <span>タグ</span>
+                    </label>
+                  </div>
+                </div>
+
+                {mocFilterType === 'folder' && (
+                  <div>
+                    <span className="mb-1 block text-gray-400">対象フォルダ</span>
+                    <select
+                      className="w-full rounded border border-white/10 bg-black/40 px-2 py-1 text-white outline-none"
+                      value={mocFilterValue}
+                      onChange={(e) => setMocFilterValue(e.target.value)}
+                    >
+                      {allFolders.map(f => (
+                        <option key={f} value={f}>{f}</option>
+                      ))}
+                      {allFolders.length === 0 && <option value="">フォルダがありません</option>}
+                    </select>
+                  </div>
+                )}
+
+                {mocFilterType === 'tag' && (
+                  <div>
+                    <span className="mb-1 block text-gray-400">対象タグ</span>
+                    <select
+                      className="w-full rounded border border-white/10 bg-black/40 px-2 py-1 text-white outline-none"
+                      value={mocFilterValue}
+                      onChange={(e) => setMocFilterValue(e.target.value)}
+                    >
+                      {masterTags.map(t => (
+                        <option key={t} value={t}>#{t}</option>
+                      ))}
+                      {masterTags.length === 0 && <option value="">タグがありません</option>}
+                    </select>
+                  </div>
+                )}
+              </div>
             )}
             <div className="flex gap-3">
               <button
@@ -2561,7 +2925,7 @@ export default function App() {
               >
                 {isMocGenerating ? 'AI生成中...' : 'MOCを作成'}
               </button>
-              <button type="button" className="rounded border border-white/10 px-4 py-2 text-sm text-gray-400 hover:bg-white/5" onClick={() => { setShowMocModal(false); setMocTitle(''); setMocAiMode(false); }}>
+              <button type="button" className="rounded border border-white/10 px-4 py-2 text-sm text-gray-400 hover:bg-white/5" onClick={() => { setShowMocModal(false); setMocTitle(''); setMocAiMode(false); setMocFilterType('all'); setMocFilterValue(''); }}>
                 キャンセル
               </button>
             </div>
