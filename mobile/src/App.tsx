@@ -402,7 +402,9 @@ export default function App() {
     }
     const initial = initialNoteContent(noteTitle(name));
     const ym = currentYearMonth();
-    const remotePath = `notes/${ym}/${name}`;
+    // プライベート表示中に作成したノートは暗号化保管庫(private/)へ
+    const isPrivate = privateMode;
+    const remotePath = isPrivate ? `private/${name}` : `notes/${ym}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -417,8 +419,8 @@ export default function App() {
 
     // state に直接追加（refreshNotes は _index.json が古いため不可）
     const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
-    // _index.json と moc/moc.md を非同期で更新（失敗しても作成自体は成功扱い）
-    if (config.gitRemoteUrl) {
+    // _index.json と moc/moc.md を非同期で更新（private は公開MOCに載せない）
+    if (config.gitRemoteUrl && !isPrivate) {
       const url = config.gitRemoteUrl;
       addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
       appendToMasterMoc(url, name).catch(console.error);
