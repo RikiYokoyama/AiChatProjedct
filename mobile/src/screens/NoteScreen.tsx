@@ -588,7 +588,7 @@ export default function NoteScreen({
               ) : (
                 /* ツリービュー */
                 (() => {
-                  const tree = buildMobileFileTree(notes);
+                  const tree = buildMobileFileTree(notes.filter((n) => !(n.remotePath || n.name).startsWith('private/')));
                   const dirs = Object.keys(tree).sort();
                   return (
                     <div className="px-2 pt-1">

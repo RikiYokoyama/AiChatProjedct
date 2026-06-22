@@ -1782,7 +1782,7 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-y-auto p-2 min-h-0">
                 {(() => {
-                  const tree = buildFileTree(notes);
+                  const tree = buildFileTree(notes.filter((n) => !n.name.startsWith('private/')));
                   const dirs = Object.keys(tree).sort();
                   return dirs.map((dir) => {
                     const dirNotes = tree[dir].slice().sort((a, b) => a.name.localeCompare(b.name));
