@@ -8,6 +8,7 @@ export default function SettingsScreen({
   gitStatus,
   gitMessage,
   aiModelMode,
+  privateMode,
   onSave,
   onSync,
   onDeletePrompt,
@@ -17,6 +18,7 @@ export default function SettingsScreen({
   gitStatus: 'idle' | 'syncing' | 'success' | 'error';
   gitMessage: string | null;
   aiModelMode: AiModelMode;
+  privateMode: boolean;
   onSave: (config: AppConfig) => void;
   onSync: () => void;
   onDeletePrompt: (id: string) => void;
@@ -126,13 +128,13 @@ export default function SettingsScreen({
 
         {/* 登録済みリスト */}
         <div className="mb-4 max-h-40 overflow-y-auto rounded-lg border border-white/10 bg-black/20 p-2 text-xs">
-          {(draft.customPrompts ?? []).length === 0 ? (
+          {(draft.customPrompts ?? []).filter(cp => privateMode ? true : !cp.isPrivate).length === 0 ? (
             <div className="py-2 text-center text-gray-500">登録されたカスタムプロンプトはありません</div>
           ) : (
-            (draft.customPrompts ?? []).map((cp) => (
+            (draft.customPrompts ?? []).filter(cp => privateMode ? true : !cp.isPrivate).map((cp) => (
               <div key={cp.id} className="flex items-center justify-between border-b border-white/5 py-1.5 last:border-0">
                 <div className="min-w-0 flex-1 pr-2">
-                  <div className="font-semibold text-gray-200 truncate">{cp.name}</div>
+                  <div className="font-semibold text-gray-200 truncate">{cp.name}{cp.isPrivate && <span className="ml-1 text-[10px] text-indigo-400">🔒</span>}</div>
                   <div className="mt-0.5 truncate text-gray-400">{cp.prompt}</div>
                 </div>
                 <button

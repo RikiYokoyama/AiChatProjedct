@@ -899,9 +899,11 @@ export default function App() {
   const chatModes = useMemo(
     () => [
       ...Object.entries(CHAT_MODE_LABELS).map(([id, label]) => ({ id, label })),
-      ...(config.customPrompts ?? []).map((p) => ({ id: p.id, label: p.name })),
+      ...(config.customPrompts ?? [])
+        .filter((p) => privateMode ? true : !p.isPrivate)
+        .map((p) => ({ id: p.id, label: p.name })),
     ],
-    [config.customPrompts],
+    [config.customPrompts, privateMode],
   );
 
   // chatMode の最新値を ref に同期（非同期コールバック内の stale closure 対策）
@@ -1001,7 +1003,7 @@ export default function App() {
       ...config,
       customPrompts: [
         ...(config.customPrompts ?? []),
-        { id, name: pendingPrompt.name, prompt: pendingPrompt.instruction },
+        { id, name: pendingPrompt.name, prompt: pendingPrompt.instruction, isPrivate: privateMode || undefined },
       ],
     };
     setConfig(next);
@@ -1215,6 +1217,7 @@ export default function App() {
               gitStatus={gitStatus}
               gitMessage={gitMessage}
               aiModelMode={aiModelMode}
+              privateMode={privateMode}
               onSave={handleSaveConfig}
               onSync={() => runSync()}
               onDeletePrompt={handleDeletePrompt}

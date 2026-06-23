@@ -13,6 +13,7 @@ export interface CustomPrompt {
   id: string;
   name: string;
   prompt: string;
+  isPrivate?: boolean; // true = 保管庫モード中のみ表示
 }
 
 export interface AppConfig {
