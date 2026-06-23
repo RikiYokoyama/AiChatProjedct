@@ -151,7 +151,7 @@ export default function NoteScreen({
 
   function generateFromTitle() {
     if (!selectedNote || isGenerating) return;
-    onSend(noteTitle(selectedNote.name));
+    onSend(selectedNote.displayName ?? noteTitle(selectedNote.name));
   }
 
   // スワイプで編集/プレビュー切替
@@ -193,7 +193,7 @@ export default function NoteScreen({
 
   const filteredNotes = searchQuery.trim()
     ? notes.filter((n) =>
-        noteTitle(n.name).toLowerCase().includes(searchQuery.trim().toLowerCase())
+        (n.displayName ?? noteTitle(n.name)).toLowerCase().includes(searchQuery.trim().toLowerCase())
       )
     : notes;
 
@@ -208,7 +208,7 @@ export default function NoteScreen({
         >
           <FileText className="h-4 w-4 shrink-0 text-indigo-400" />
           <span className="min-w-0 flex-1 truncate text-sm text-white">
-            {selectedNote ? noteTitle(selectedNote.name) : 'ファイルを選択...'}
+            {selectedNote ? (selectedNote.displayName ?? noteTitle(selectedNote.name)) : 'ファイルを選択...'}
           </span>
           <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
         </button>
@@ -409,7 +409,7 @@ export default function NoteScreen({
               <div className="flex w-full items-center justify-between">
                 <div>
                   <h2 className="text-sm font-bold text-white">アウトライン</h2>
-                  <p className="text-[10px] text-indigo-300 truncate max-w-[200px]">{selectedNote.name}</p>
+                  <p className="text-[10px] text-indigo-300 truncate max-w-[200px]">{selectedNote.displayName ?? selectedNote.name}</p>
                 </div>
                 <button onClick={() => setShowOutline(false)} className="rounded-full p-1.5 text-gray-400 active:bg-white/10">
                   <X className="h-5 w-5" />
@@ -578,7 +578,7 @@ export default function NoteScreen({
                       >
                         <FileText className={`h-4 w-4 shrink-0 ${isSelected ? 'text-indigo-400' : 'text-gray-500'}`} />
                         <span className={`flex-1 truncate text-sm ${isSelected ? 'font-semibold text-indigo-300' : 'text-gray-200'}`}>
-                          {noteTitle(note.name)}
+                          {note.displayName ?? noteTitle(note.name)}
                         </span>
                         {isSelected && <Check className="h-4 w-4 shrink-0 text-indigo-400" />}
                       </button>
