@@ -555,6 +555,33 @@ export default function App() {
     let acc = initial;
     const client = new GeminiClient(config.geminiApiKey);
     const systemPrompt = getSystemPrompt(modeToUse);
+
+    // 新規作成時のMOCコンテキスト: タイトルキーワードで関連ノートを絞り込む
+    const createActiveNotes = notes.filter(
+      (n) => n.name !== 'moc/_All_Notes_MOC.md' && !n.name.startsWith('private/') && !n.name.startsWith('_')
+    );
+    const createKeywords = noteTitle(name).toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
+    const createScored = createActiveNotes.map((note) => {
+      let score = 0;
+      const nameLower = (note.displayName ?? note.name).toLowerCase();
+      for (const word of createKeywords) { if (nameLower.includes(word)) score += 10; }
+      return { note, score };
+    });
+    let createMatched = createScored.filter((i) => i.score > 0).sort((a, b) => b.score - a.score).map((i) => i.note);
+    if (createMatched.length === 0) {
+      createMatched = createActiveNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 30);
+    } else {
+      createMatched = createMatched.slice(0, 50);
+    }
+    let createMocContent = '';
+    if (createMatched.length > 0) {
+      createMocContent = '関連する可能性のある既存ノートの一覧:\n';
+      for (const note of createMatched) {
+        const dn = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+        createMocContent += `- [[${note.name.replace(/\.md$/i, '')}|${dn}]]\n`;
+      }
+    }
+
     await client.chatStream(
       [
         {
@@ -587,6 +614,7 @@ export default function App() {
         setIsGenerating(false);
         alert(err instanceof Error ? err.message : String(err));
       },
+      { mocContext: createMocContent || null },
     );
   }
 
@@ -996,6 +1024,40 @@ export default function App() {
     const contextName = noteTabSelectedName;
     const contextContent = noteTabSelectedName ? noteTabContentRef.current : null;
 
+    // MOCコンテキスト: プロンプトのキーワードに関連するノートをAIに渡す
+    const activeNotes = notes.filter(
+      (n) =>
+        n.name !== 'moc/_All_Notes_MOC.md' &&
+        !n.name.startsWith('private/') &&
+        !n.name.startsWith('_')
+    );
+    const words = prompt.toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
+    const scoredNotes = activeNotes.map((note) => {
+      let score = 0;
+      const nameLower = (note.displayName ?? note.name).toLowerCase();
+      const tags = (note.tags || []).map((t) => t.toLowerCase());
+      for (const word of words) {
+        if (nameLower.includes(word)) score += 10;
+        for (const tag of tags) { if (tag.includes(word)) score += 5; }
+      }
+      return { note, score };
+    });
+    let matchedNotes = scoredNotes.filter((i) => i.score > 0).sort((a, b) => b.score - a.score).map((i) => i.note);
+    if (matchedNotes.length === 0) {
+      matchedNotes = activeNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 30);
+    } else {
+      matchedNotes = matchedNotes.slice(0, 50);
+    }
+    let mocContent = '';
+    if (matchedNotes.length > 0) {
+      mocContent = '関連する可能性のある既存ノートの一覧:\n';
+      for (const note of matchedNotes) {
+        const displayName = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+        const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
+        mocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
+      }
+    }
+
     await client.chatStream(
       nextHistory,
       getSystemPrompt(chatMode),
@@ -1022,7 +1084,10 @@ export default function App() {
         setIsGenerating(false);
         alert(err instanceof Error ? err.message : String(err));
       },
-      chatMode === 'long-doc' ? { contextLimit: 100000 } : undefined,
+      {
+        contextLimit: chatMode === 'long-doc' ? 100000 : 12000,
+        mocContext: mocContent || null,
+      },
     );
   }
 

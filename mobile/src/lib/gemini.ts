@@ -120,7 +120,7 @@ export class GeminiClient {
     onChunk: (text: string) => void,
     onComplete: (fullText: string) => void,
     onError: (err: unknown) => void,
-    options?: { contextLimit?: number },
+    options?: { contextLimit?: number; mocContext?: string | null },
   ) {
     if (!this.apiKey) {
       onError(new Error('Gemini APIキーが設定されていません。設定画面でAPIキーを入力してください。'));
@@ -133,9 +133,12 @@ export class GeminiClient {
     }));
 
     const contextLimit = options?.contextLimit ?? 12000;
-    const systemText = noteContext
+    let systemText = noteContext
       ? `${systemInstruction}\n\n---\n以下は現在開いているノートの内容です。この内容を前提に回答してください:\n\n${noteContext.slice(0, contextLimit)}`
       : systemInstruction;
+    if (options?.mocContext) {
+      systemText += `\n\n---\n以下は現在アプリ内に存在するノートの一覧（MOC）です。ユーザーへの回答でこれらのノートに関連する話題が出た場合、積極的にリンクを提案してください。\n\n【リンク生成時の超重要ルール】\n1. 必ず二重ブラケット記法 \`[[ノート名]]\` または \`[[ノートのパス|表示名]]\` の形式で出力してください。\n2. 標準のマークダウンリンクは絶対に生成しないでください。\n\n${options.mocContext}`;
+    }
 
     let lastError: unknown = null;
 
