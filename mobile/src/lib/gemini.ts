@@ -133,11 +133,15 @@ export class GeminiClient {
     }));
 
     const contextLimit = options?.contextLimit ?? 12000;
-    let systemText = noteContext
-      ? `${systemInstruction}\n\n---\n以下は現在開いているノートの内容です。この内容を前提に回答してください:\n\n${noteContext.slice(0, contextLimit)}`
-      : systemInstruction;
+
+    let systemText = systemInstruction;
+
     if (options?.mocContext) {
-      systemText += `\n\n---\n以下は現在アプリ内に存在するノートの一覧（MOC）です。ユーザーへの回答でこれらのノートに関連する話題が出た場合、積極的にリンクを提案してください。\n\n【リンク生成時の超重要ルール】\n1. 必ず二重ブラケット記法 \`[[ノート名]]\` または \`[[ノートのパス|表示名]]\` の形式で出力してください。\n2. 標準のマークダウンリンクは絶対に生成しないでください。\n\n${options.mocContext}`;
+      systemText += `\n\n---\n以下は現在アプリ内に存在するノートの一覧（MOC）です。ユーザーへの回答でこれらのノートに関連する話題が出た場合、積極的にリンクを提案してください。\n\n【リンク生成時の超重要ルール】\n1. 必ず二重ブラケット記法 \`[[ノート名]]\` または \`[[ノートのパス|表示名]]\` の形式で出力してください。\n2. 例: \`[[notes/2026-06/現在交友プログラムを作成しています AI Markdown Chat Note|AI Markdown Chat Note開発]]\` のように記述します。\n3. 標準のマークダウンリンク（ \`[表示名](#wiki-...)\` や \`[表示名](notes/...)\` ）はシステムが処理できないため、絶対に生成しないでください！このルールを厳守してください。\n\n${options.mocContext}`;
+    }
+
+    if (noteContext) {
+      systemText += `\n\n---\n以下は現在開いているノートの内容です。この内容を前提に回答してください:\n\n${noteContext.slice(0, contextLimit)}`;
     }
 
     let lastError: unknown = null;

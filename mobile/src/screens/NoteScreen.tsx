@@ -75,6 +75,8 @@ export default function NoteScreen({
   onAiAction,
   onAddTag,
   onRemoveTag,
+  onBack,
+  onRename,
 }: {
   notes: Note[];
   selectedNote: Note | null;
@@ -94,11 +96,23 @@ export default function NoteScreen({
   onAiAction: (action: 'title' | 'tags' | 'summary') => void;
   onAddTag: (tag: string) => void;
   onRemoveTag: (tag: string) => void;
+  onBack: () => void;
+  onRename: (note: Note, newName: string) => Promise<void>;
 }) {
-  const existingNames = useMemo(
-    () => new Set(notes.map(n => n.name.toLowerCase())),
-    [notes],
-  );
+  const existingNames = useMemo(() => {
+    const s = new Set<string>();
+    for (const n of notes) {
+      // ファイル名のみ（mobile の note.name 形式）
+      s.add(n.name.toLowerCase());
+      s.add(n.name.replace(/\.md$/i, '').toLowerCase());
+      // フルパス（remotePath 形式 / PC 互換）
+      if (n.remotePath) {
+        s.add(n.remotePath.toLowerCase());
+        s.add(n.remotePath.replace(/\.md$/i, '').toLowerCase());
+      }
+    }
+    return s;
+  }, [notes]);
 
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -113,6 +127,10 @@ export default function NoteScreen({
   const [showTagInput, setShowTagInput] = useState(false);
   const keyboardInset = useKeyboardInset();
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const savedPreviewScroll = useRef(0);
+  const savedEditorScroll = useRef(0);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameInput, setRenameInput] = useState('');
 
   const editorSpeech = useSpeechInput((text) => {
     insertAtCursor(text);
@@ -154,7 +172,7 @@ export default function NoteScreen({
     onSend(selectedNote.displayName ?? noteTitle(selectedNote.name));
   }
 
-  // スワイプで編集/プレビュー切替
+  // スワイプ操作: 左端から右スワイプ→戻る、それ以外→編集/プレビュー切替
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
   const onTouchStart = (e: React.TouchEvent) => {
@@ -164,8 +182,28 @@ export default function NoteScreen({
   const onTouchEnd = (e: React.TouchEvent) => {
     const dx = e.changedTouches[0].clientX - touchStartX.current;
     const dy = e.changedTouches[0].clientY - touchStartY.current;
-    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2) {
-      setEditMode((m) => (m === 'preview' ? 'edit' : 'preview'));
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      if (dx > 0 && touchStartX.current < 40) {
+        // 左端から右スワイプ → ノート一覧に戻る
+        onBack();
+      } else {
+        // それ以外の横スワイプ → 編集/プレビュー切替（スクロール位置を保存・復元）
+        if (dx < 0) {
+          // preview → edit
+          savedPreviewScroll.current = previewRef.current?.scrollTop ?? 0;
+          setEditMode('edit');
+          requestAnimationFrame(() => {
+            if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
+          });
+        } else {
+          // edit → preview
+          savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
+          setEditMode('preview');
+          requestAnimationFrame(() => {
+            if (previewRef.current) previewRef.current.scrollTop = savedPreviewScroll.current;
+          });
+        }
+      }
     }
   };
 
@@ -214,13 +252,36 @@ export default function NoteScreen({
         </button>
 
         {selectedNote && (
-          <button
-            onClick={() => setEditMode((m) => (m === 'edit' ? 'preview' : 'edit'))}
-            className="flex items-center gap-1 rounded-xl bg-white/5 px-3 py-2 text-xs text-gray-300 active:bg-white/10"
-          >
-            {editMode === 'edit' ? <Eye className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
-            {editMode === 'edit' ? 'プレビュー' : '編集'}
-          </button>
+          <>
+            <button
+              onClick={() => {
+                if (editMode === 'edit') {
+                  savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
+                  setEditMode('preview');
+                  requestAnimationFrame(() => {
+                    if (previewRef.current) previewRef.current.scrollTop = savedPreviewScroll.current;
+                  });
+                } else {
+                  savedPreviewScroll.current = previewRef.current?.scrollTop ?? 0;
+                  setEditMode('edit');
+                  requestAnimationFrame(() => {
+                    if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
+                  });
+                }
+              }}
+              className="flex items-center gap-1 rounded-xl bg-white/5 px-3 py-2 text-xs text-gray-300 active:bg-white/10"
+            >
+              {editMode === 'edit' ? <Eye className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
+              {editMode === 'edit' ? 'プレビュー' : '編集'}
+            </button>
+            <button
+              onClick={() => { setRenameInput(selectedNote.displayName ?? noteTitle(selectedNote.name)); setShowRenameDialog(true); }}
+              className="rounded-xl bg-white/5 p-2 text-gray-400 active:bg-white/10"
+              title="ファイル名変更"
+            >
+              <FileText className="h-4 w-4" />
+            </button>
+          </>
         )}
 
         <span className="shrink-0 text-[10px] text-gray-500">
@@ -663,6 +724,41 @@ export default function NoteScreen({
             </div>
           </div>
         </>
+      )}
+      {/* リネームダイアログ */}
+      {showRenameDialog && selectedNote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setShowRenameDialog(false)}>
+          <div className="w-full max-w-sm rounded-xl bg-[#0f172a] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-3 text-sm font-semibold text-white">ファイル名を変更</h3>
+            <input
+              className="mb-4 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500"
+              value={renameInput}
+              onChange={(e) => setRenameInput(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const newName = renameInput.trim();
+                  if (newName) { onRename(selectedNote, newName); setShowRenameDialog(false); }
+                } else if (e.key === 'Escape') {
+                  setShowRenameDialog(false);
+                }
+              }}
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowRenameDialog(false)}
+                className="flex-1 rounded-lg border border-white/10 py-2 text-sm text-gray-300 active:bg-white/5"
+              >キャンセル</button>
+              <button
+                onClick={() => {
+                  const newName = renameInput.trim();
+                  if (newName) { onRename(selectedNote, newName); setShowRenameDialog(false); }
+                }}
+                className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white active:bg-indigo-500"
+              >変更</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

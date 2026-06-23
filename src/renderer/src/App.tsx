@@ -227,8 +227,6 @@ export default function App() {
 
   // 新機能: ソート・サジェスト・Wikiリンクコンテキストメニュー状態
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'>('date-desc');
-  const [showSuggest, setShowSuggest] = useState(false);
-  const [suggestIndex, setSuggestIndex] = useState(-1);
   const [wikiLinkContextMenu, setWikiLinkContextMenu] = useState<{
     x: number;
     y: number;
@@ -241,7 +239,6 @@ export default function App() {
       setContextMenu(null);
       setPreviewContextMenu(null);
       setWikiLinkContextMenu(null);
-      setShowSuggest(false);
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -329,13 +326,26 @@ export default function App() {
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewDivRef = useRef<HTMLDivElement>(null);
+  const savedPreviewScroll = useRef(0);
+  const savedEditorScroll = useRef(0);
 
-  // 編集モードに切り替わったときに自動でフォーカスを当てる
+  // 編集モード切り替え時にスクロール位置を保存・復元
   useEffect(() => {
-    if (editMode === 'edit' && editorRef.current) {
-      editorRef.current.focus();
+    if (editMode === 'edit') {
+      // preview → edit: プレビューのスクロール位置を保存し、エディタの位置を復元
+      savedPreviewScroll.current = previewDivRef.current?.scrollTop ?? 0;
+      editorRef.current?.focus();
+      requestAnimationFrame(() => {
+        if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
+      });
+    } else {
+      // edit → preview: エディタのスクロール位置を保存し、プレビューの位置を復元
+      savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
+      requestAnimationFrame(() => {
+        if (previewDivRef.current) previewDivRef.current.scrollTop = savedPreviewScroll.current;
+      });
     }
-  }, [editMode, selectedNote?.name]);
+  }, [editMode]);
 
   const wrapSelectionWithWikiLink = useCallback(() => {
     const textarea = editorRef.current;
@@ -404,9 +414,13 @@ export default function App() {
   const preprocessWikiLinks = (text: string) => {
     if (!text) return '';
     // [[実際のノート名|表示名]] のパターン
-    let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '[$2](#wiki-$1)');
+    let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, (_, noteName, displayName) => {
+      return `[${displayName}](#wiki-${encodeURIComponent(noteName.trim())})`;
+    });
     // [[キーワード]] のパターン
-    processed = processed.replace(/\[\[([^\]]+)\]\]/g, '[$1](#wiki-$1)');
+    processed = processed.replace(/\[\[([^\]]+)\]\]/g, (_, noteName) => {
+      return `[${noteName}](#wiki-${encodeURIComponent(noteName.trim())})`;
+    });
     return processed;
   };
 
@@ -571,8 +585,7 @@ export default function App() {
   const filteredNotes = useMemo(() => {
     // privateMode=true ならprivate専用一覧、それ以外は通常（private除外）
     let result = notes.filter((n) =>
-      (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) &&
-      n.name !== 'moc/_All_Notes_MOC.md'
+      (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/'))
     );
     // タグ絞り込み（コンボボックス）
     if (tagFilter) {
@@ -618,51 +631,6 @@ export default function App() {
     });
   }, [notes, searchQuery, sortBy, privateMode, tagFilter]);
 
-  // 検索サジェスト候補の抽出
-  const suggestions = useMemo(() => {
-    const query = searchQuery.trim();
-    if (!query) return [];
-    const queryLower = query.toLowerCase();
-
-    if (queryLower.startsWith('tag:')) {
-      const val = query.substring(4).trim().toLowerCase();
-      const allTags = Object.keys(allTagsMap);
-      return allTags
-        .filter((t) => t.toLowerCase().includes(val))
-        .map((t) => ({ type: 'tag', value: t, label: `#${t}` }));
-    } else if (queryLower.startsWith('#')) {
-      const val = query.substring(1).trim().toLowerCase();
-      const allTags = Object.keys(allTagsMap);
-      return allTags
-        .filter((t) => t.toLowerCase().includes(val))
-        .map((t) => ({ type: 'tag', value: t, label: `#${t}` }));
-    } else if (queryLower.startsWith('link:')) {
-      const val = query.substring(5).trim().toLowerCase();
-      return notes
-        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name !== 'moc/_All_Notes_MOC.md' && n.name.toLowerCase().includes(val))
-        .map((n) => ({ type: 'link', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
-    } else {
-      return notes
-        .filter((n) => (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/')) && n.name !== 'moc/_All_Notes_MOC.md' && n.name.toLowerCase().includes(queryLower))
-        .map((n) => ({ type: 'note', value: n.name, label: `📄 ${n.name.replace(/^.*\//, '').replace(/\.md$/i, '')}` }));
-    }
-  }, [notes, searchQuery, allTagsMap, privateMode]);
-
-  const selectSuggestion = (s: { type: string; value: string }) => {
-    if (s.type === 'tag') {
-      if (searchQuery.toLowerCase().startsWith('tag:')) {
-        setSearchQuery(`tag:${s.value}`);
-      } else {
-        setSearchQuery(`#${s.value}`);
-      }
-    } else if (s.type === 'link') {
-      setSearchQuery(`link:${s.value}`);
-    } else {
-      setSearchQuery(s.value);
-    }
-    setShowSuggest(false);
-    setSuggestIndex(-1);
-  };
 
   // Wikiリンク解除処理
   const handleRemoveWikiLink = async () => {
@@ -724,6 +692,32 @@ export default function App() {
     }
     return map;
   }, [notes]);
+
+  async function appendToMasterMocLocal(noteName: string) {
+    if (
+      noteName.startsWith('private/') ||
+      noteName.startsWith('moc/') ||
+      noteName.startsWith('_')
+    ) {
+      return;
+    }
+    const mocPath = 'moc/_All_Notes_MOC.md';
+    const displayName = noteName.replace(/\.md$/i, '');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const newLine = `- [[${displayName}]] — ${dateStr} 追加\n`;
+    try {
+      let existingContent = '';
+      try {
+        existingContent = await window.electronAPI.readNote(mocPath);
+      } catch (e) {
+        // 存在しない場合は空
+      }
+      const updated = existingContent.trimEnd() + '\n' + newLine;
+      await window.electronAPI.saveNote({ filename: mocPath, content: updated });
+    } catch (err) {
+      console.error('Failed to append to master MOC:', err);
+    }
+  }
 
   async function generateAutoMoc(list: any[], force = false) {
     try {
@@ -806,7 +800,6 @@ export default function App() {
         setSelectedNote(updated ?? null);
       }
       // バックグラウンドで全自動MOCを更新
-      generateAutoMoc(list);
     } finally {
       setIsLoading(false);
     }
@@ -971,6 +964,7 @@ export default function App() {
     }
     await loadNotesList();
     const savedName = result.name ?? name;
+    await appendToMasterMocLocal(savedName);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
     setRibbonView('notes');
@@ -1049,6 +1043,7 @@ export default function App() {
     setNewNoteName('Untitled');
     await loadNotesList();
     const savedName = result.name ?? name;
+    await appendToMasterMocLocal(savedName);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
 
@@ -1504,6 +1499,7 @@ export default function App() {
         const result = await window.electronAPI.saveNote({ filename, content: fullContent });
         if (result.success) {
           const savedName = result.name ?? filename;
+          await appendToMasterMocLocal(savedName);
           const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
           setSelectedNote(note);
           setContent(fullContent);
@@ -2146,77 +2142,39 @@ export default function App() {
           ) : (
             <>
               <div className="space-y-2 p-3">
-                <button
-                  className="flex w-full items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-2 font-semibold hover:bg-indigo-500 transition-colors text-sm"
-                  onClick={() => { setIsAiNoteMode(true); setShowNewNoteModal(true); }}
-                >
-                  <Plus className="h-4 w-4" />
-                  AIノート作成
-                </button>
-                <button
-                  className="flex w-full items-center justify-center gap-2 rounded bg-gray-800 border border-white/10 px-3 py-2 font-semibold hover:bg-gray-700 transition-colors text-sm"
-                  onClick={() => { setIsAiNoteMode(false); setShowNewNoteModal(true); }}
-                >
-                  <Plus className="h-4 w-4" />
-                  新規ノート作成
-                </button>
-                <button
-                  className="flex w-full items-center justify-center gap-2 rounded bg-emerald-900/60 border border-emerald-700/40 px-3 py-2 font-semibold hover:bg-emerald-800/60 transition-colors text-sm text-emerald-300"
-                  onClick={() => setShowMocModal(true)}
-                >
-                  <Plus className="h-4 w-4" />
-                  🗺 MOC作成
-                </button>
-                <div className="relative flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
+                  <button
+                    className="flex w-full items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-2 font-semibold hover:bg-indigo-500 transition-colors text-sm"
+                    onClick={() => { setIsAiNoteMode(true); setShowNewNoteModal(true); }}
+                  >
+                    <Plus className="h-4 w-4" />
+                    AIノート作成
+                  </button>
+                  <button
+                    className="flex w-full items-center justify-center gap-2 rounded bg-gray-800 border border-white/10 px-3 py-2 font-semibold hover:bg-gray-700 transition-colors text-sm"
+                    onClick={() => { setIsAiNoteMode(false); setShowNewNoteModal(true); }}
+                  >
+                    <Plus className="h-4 w-4" />
+                    新規ノート作成
+                  </button>
+                  <button
+                    className="flex w-full items-center justify-center gap-2 rounded bg-emerald-900/60 border border-emerald-700/40 px-3 py-2 font-semibold hover:bg-emerald-800/60 transition-colors text-sm text-emerald-300"
+                    onClick={() => setShowMocModal(true)}
+                  >
+                    <Plus className="h-4 w-4" />
+                    🗺 MOC作成
+                  </button>
+                <div className="flex items-center gap-2 rounded border border-white/10 bg-black/20 px-3 py-2">
                   <Search className="h-4 w-4 text-gray-500" />
                   <input
                     className="w-full bg-transparent text-sm outline-none"
                     value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setShowSuggest(true);
-                      setSuggestIndex(-1);
-                    }}
-                    onFocus={() => setShowSuggest(true)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (showSuggest && suggestions.length > 0) {
-                        if (e.key === 'ArrowDown') {
-                          e.preventDefault();
-                          setSuggestIndex(prev => Math.min(prev + 1, suggestions.length - 1));
-                        } else if (e.key === 'ArrowUp') {
-                          e.preventDefault();
-                          setSuggestIndex(prev => Math.max(prev - 1, -1));
-                        } else if (e.key === 'Enter') {
-                          if (suggestIndex >= 0) {
-                            e.preventDefault();
-                            selectSuggestion(suggestions[suggestIndex]);
-                          }
-                        } else if (e.key === 'Escape') {
-                          setShowSuggest(false);
-                          setSuggestIndex(-1);
-                        }
-                      }
-                    }}
+                    onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="検索 (tag:タグ名, link:ノート名)"
                   />
-                  {showSuggest && suggestions.length > 0 && (
-                    <ul 
-                      className="absolute left-0 right-0 z-50 mt-1 max-h-48 overflow-y-auto rounded border border-white/10 bg-[#0c1222] py-1 shadow-xl top-full"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {suggestions.map((s, idx) => (
-                        <li
-                          key={idx}
-                          onClick={() => selectSuggestion(s)}
-                          className={`cursor-pointer px-3 py-1.5 text-xs transition-colors ${
-                            idx === suggestIndex ? 'bg-indigo-600 text-white' : 'hover:bg-white/5 text-gray-300'
-                          }`}
-                        >
-                          {s.label}
-                        </li>
-                      ))}
-                    </ul>
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')} className="text-gray-500 hover:text-gray-300">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
                   )}
                 </div>
                 {privateMode && (

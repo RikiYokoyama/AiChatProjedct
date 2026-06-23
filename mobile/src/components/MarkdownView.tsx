@@ -41,7 +41,10 @@ export default function MarkdownView({
   function noteExists(noteName: string): boolean {
     if (!existingNames) return true;
     const lower = noteName.toLowerCase();
-    return existingNames.has(lower) || existingNames.has(lower + '.md');
+    if (existingNames.has(lower) || existingNames.has(lower + '.md')) return true;
+    // パス形式 (notes/2026-06/Name) のリンクに対してベースネームでもマッチ
+    const base = lower.split('/').pop() ?? lower;
+    return existingNames.has(base) || existingNames.has(base + '.md');
   }
 
   return (

@@ -56,7 +56,6 @@ import {
   vaultExistsOnGitHub,
   setupVaultOnGitHub,
   unlockVaultFromGitHub,
-
 } from './lib/githubSync';
 
 const CHAT_MODE_LABELS: Record<ChatMode, string> = {
@@ -566,7 +565,11 @@ export default function App() {
 
     // 新規作成時のMOCコンテキスト: タイトルキーワードで関連ノートを絞り込む
     const createActiveNotes = notes.filter(
-      (n) => n.name !== 'moc/_All_Notes_MOC.md' && !n.name.startsWith('private/') && !n.name.startsWith('_')
+      (n) =>
+        !n.name.startsWith('private/') &&
+        !n.name.startsWith('_') &&
+        !n.name.startsWith('moc/') &&
+        n.name.replace(/\.md$/i, '').length <= 40
     );
     const createKeywords = noteTitle(name).toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
     const createScored = createActiveNotes.map((note) => {
@@ -586,7 +589,8 @@ export default function App() {
       createMocContent = '関連する可能性のある既存ノートの一覧:\n';
       for (const note of createMatched) {
         const dn = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
-        createMocContent += `- [[${note.name.replace(/\.md$/i, '')}|${dn}]]\n`;
+        const linkPath = (note.remotePath ?? note.name).replace(/\.md$/i, '');
+        createMocContent += `- [[${linkPath}|${dn}]]\n`;
       }
     }
 
@@ -785,23 +789,75 @@ export default function App() {
 
   // ---------- Wikiリンク ----------
   const handleWikiLinkClick = useCallback(
-    async (name: string) => {
-      const filename = name.endsWith('.md') ? name : `${name}.md`;
-      const target = notes.find((n) => n.name.toLowerCase() === filename.toLowerCase());
+    async (rawName: string) => {
+      // PC版と同様にデコード・囲みカッコのゴミ除去
+      const cleanName = decodeURIComponent(rawName)
+        .trim()
+        .replace(/^[「『"']+|[」』"']+$/g, '');
+      const filename = cleanName.endsWith('.md') ? cleanName : `${cleanName}.md`;
+
+      // PC版と同じ5段階ファジーマッチング（remotePath でも検索）
+      const norm = (s: string) => s.toLowerCase().replace(/[\s\-_]/g, '');
+      let target = notes.find((n) => n.name.toLowerCase() === filename.toLowerCase());
+      // remotePath によるフルパスマッチ（AIがフルパス形式で生成した場合に対応）
+      if (!target) target = notes.find((n) => (n.remotePath ?? '').toLowerCase() === filename.toLowerCase());
+      if (!target) target = notes.find((n) => norm(n.name) === norm(filename));
+      if (!target) target = notes.find((n) => norm(n.remotePath ?? n.name) === norm(filename));
+      if (!target) {
+        const base = norm(filename.split('/').pop() ?? '');
+        target = notes.find((n) => norm(n.name.split('/').pop() ?? '') === base);
+      }
+      if (!target) {
+        const base = norm(filename.split('/').pop()?.replace(/\.md$/i, '') ?? '');
+        if (base.length >= 2) {
+          target = notes.find((n) => {
+            const nb = norm(n.name.split('/').pop()?.replace(/\.md$/i, '') ?? '');
+            return nb.includes(base) || base.includes(nb);
+          });
+        }
+      }
+      if (!target) {
+        const base = norm(filename.split('/').pop()?.replace(/\.md$/i, '') ?? '');
+        if (base.length >= 8) {
+          target = notes.find((n) => {
+            const nb = norm(n.name.split('/').pop()?.replace(/\.md$/i, '') ?? '');
+            return nb.startsWith(base) || base.startsWith(nb);
+          });
+        }
+      }
+
       if (target) {
         selectNoteForNoteTab(target);
         setTab('note');
         return;
       }
-      if (!window.confirm(`ファイル「${name}」は存在しません。新しく作成しますか？`)) return;
-      const clean = cleanFilename(name);
+
+      if (!window.confirm(`ファイル「${cleanName}」は存在しません。新しく作成しますか？`)) return;
+
+      // GitHub に保存（createNote と同じ方式）
+      const clean = cleanFilename(cleanName);
       const initial = initialNoteContent(noteTitle(clean));
-      await writeNote(clean, initial);
-      await refreshNotes();
-      selectNoteForNoteTab(buildNote(clean, initial));
+      const ym = currentYearMonth();
+      const remotePath = `notes/${ym}/${clean}`;
+      let newSha: string | undefined;
+      try {
+        const cfg = configRef.current;
+        if (cfg.gitRemoteUrl) {
+          newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, initial);
+          addEntryToIndex(cfg.gitRemoteUrl, { name: clean, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(() => {});
+        } else {
+          await writeNote(clean, initial);
+        }
+      } catch (err) {
+        alert('ノートの作成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+        return;
+      }
+      const newNote: Note = { ...buildNote(clean, initial), remotePath, sha: newSha };
+      setNotes((prev) => [...prev, newNote]);
+      selectNoteForNoteTab(newNote);
       setTab('note');
     },
-    [notes, selectNoteForNoteTab, refreshNotes],
+    [notes, selectNoteForNoteTab, configRef, saveNoteToGitHub],
   );
 
   // ---------- タグ ----------
@@ -918,6 +974,27 @@ export default function App() {
     );
   }
 
+  // ---------- ノートリネーム ----------
+  async function handleRenameNote(note: Note, newTitle: string) {
+    if (!config.gitRemoteUrl) { alert('GitHub連携が設定されていません'); return; }
+    const newFilename = newTitle.endsWith('.md') ? newTitle : `${newTitle}.md`;
+    const oldPath = note.remotePath ?? `notes/${note.name}`;
+    const folder = oldPath.includes('/') ? oldPath.substring(0, oldPath.lastIndexOf('/')) : 'notes';
+    const newPath = `${folder}/${newFilename}`;
+    try {
+      // 新パスにコピーして旧パスを削除
+      const { content: currentContent, sha: oldSha } = await fetchNoteContentFromGitHub(config.gitRemoteUrl, oldPath);
+      await saveNoteToGitHub(config.gitRemoteUrl, newPath, currentContent);
+      await deleteNoteOnGitHub(config.gitRemoteUrl, oldPath, oldSha);
+      // state 更新
+      const newNote = { ...note, name: newFilename, remotePath: newPath, sha: undefined };
+      setNotes((prev) => prev.map((n) => n.name === note.name ? newNote : n));
+      setNoteTabSelectedName(newFilename);
+    } catch (err) {
+      alert('リネームに失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
   // ---------- AIチャット (NoteScreen / 共通) ----------
   const chatModes = useMemo(
     () => [
@@ -976,8 +1053,9 @@ export default function App() {
           await writeNote(targetName, appended);
         }
       } else {
-        // ファイルを新規作成
-        const title = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
+        // ファイルを新規作成（タイトルは30文字に切る。長い質問文がそのままファイル名になるのを防ぐ）
+        const rawTitle = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
+        const title = rawTitle.slice(0, 30);
         const filename = cleanFilename(title);
         const full = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${extracted.join(', ')}\n\n${block}\n`;
         const remotePath = `notes/${filename}`;
@@ -1054,15 +1132,29 @@ export default function App() {
     setIsGenerating(true);
 
     const contextName = noteTabSelectedName;
-    const contextContent = noteTabSelectedName ? noteTabContentRef.current : null;
+    // chatHistory として送る会話履歴（---\n## User…## AI…）をノートコンテキストから除去する。
+    // そのまま送ると AI が過去のユーザー質問文をノート名と誤認してリンク化してしまうため。
+    const rawNoteContext = noteTabSelectedName ? noteTabContentRef.current : null;
+    const contextContent = rawNoteContext
+      ? (rawNoteContext.replace(/\n*---\s*\n+##\s*User[\s\S]*$/m, '').trim() || null)
+      : null;
 
     // MOCコンテキスト: プロンプトのキーワードに関連するノートをAIに渡す
-    const activeNotes = notes.filter(
-      (n) =>
-        n.name !== 'moc/_All_Notes_MOC.md' &&
-        !n.name.startsWith('private/') &&
-        !n.name.startsWith('_')
-    );
+    // モバイルはノートを遅延ロード（content=''）するためタグが空。ファイル名・表示名のみでスコアリング。
+    // note.name はファイル名のみ (例: MyNote.md)、フルパスは note.remotePath にある。
+    // private/ や moc/ フィルターは remotePath で判定する必要がある。
+    const activeNotes = notes.filter((n) => {
+      const path = n.remotePath ?? n.name;
+      return (
+        !path.startsWith('private/') &&
+        !path.startsWith('_') &&
+        !path.startsWith('moc/') &&
+        !n.name.startsWith('_') &&
+        // ユーザー質問文がそのままファイル名になった長すぎるノートを除外（正常なノート名は40文字以内）
+        n.name.replace(/\.md$/i, '').length <= 40
+      );
+    });
+    console.log(`[MOC] notes総数=${notes.length}, activeNotes=${activeNotes.length}`);
     const words = prompt.toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
     const scoredNotes = activeNotes.map((note) => {
       let score = 0;
@@ -1076,7 +1168,10 @@ export default function App() {
     });
     let matchedNotes = scoredNotes.filter((i) => i.score > 0).sort((a, b) => b.score - a.score).map((i) => i.note);
     if (matchedNotes.length === 0) {
-      matchedNotes = activeNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 30);
+      // キーワードマッチなし → 全ノートを新着順で最大200件（タグ空問題の補償）
+      matchedNotes = activeNotes
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, 200);
     } else {
       matchedNotes = matchedNotes.slice(0, 50);
     }
@@ -1086,7 +1181,9 @@ export default function App() {
       for (const note of matchedNotes) {
         const displayName = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
         const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
-        mocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
+        // PC版と同じフルパス形式 [[notes/2026-06/name|display]] で送る
+        const linkPath = (note.remotePath ?? note.name).replace(/\.md$/i, '');
+        mocContent += `- [[${linkPath}|${displayName}]]${tagsText}\n`;
       }
     }
 
@@ -1229,6 +1326,8 @@ export default function App() {
             onAiAction={handleAiAction}
             onAddTag={(tag) => noteTabSelectedNote && updateTags(noteTabSelectedNote.name, noteTabContent, Array.from(new Set([...(noteTabSelectedNote.tags ?? []), tag.replace(/^#/, '')])))}
             onRemoveTag={(tag) => noteTabSelectedNote && updateTags(noteTabSelectedNote.name, noteTabContent, (noteTabSelectedNote.tags ?? []).filter((t) => t !== tag))}
+            onBack={() => setTab('files')}
+            onRename={handleRenameNote}
           />
         )}
 
