@@ -329,22 +329,25 @@ export default function App() {
   const savedPreviewScroll = useRef(0);
   const savedEditorScroll = useRef(0);
 
-  // 編集モード切り替え時にスクロール位置を保存・復元
+  // 編集モード切り替え時にスクロール位置を保存・復元（初回マウントはスキップ）
+  const prevEditMode = useRef<'edit' | 'preview' | null>(null);
   useEffect(() => {
+    if (prevEditMode.current === null) {
+      prevEditMode.current = editMode;
+      return;
+    }
     if (editMode === 'edit') {
-      // preview → edit: プレビューのスクロール位置を保存し、エディタの位置を復元
       savedPreviewScroll.current = previewDivRef.current?.scrollTop ?? 0;
-      editorRef.current?.focus();
       requestAnimationFrame(() => {
         if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
       });
     } else {
-      // edit → preview: エディタのスクロール位置を保存し、プレビューの位置を復元
       savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
       requestAnimationFrame(() => {
         if (previewDivRef.current) previewDivRef.current.scrollTop = savedPreviewScroll.current;
       });
     }
+    prevEditMode.current = editMode;
   }, [editMode]);
 
   const wrapSelectionWithWikiLink = useCallback(() => {
