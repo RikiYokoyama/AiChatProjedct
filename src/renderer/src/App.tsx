@@ -802,10 +802,11 @@ export default function App() {
           .map((tab) => list.find((n) => n.name === tab.name) ?? tab)
           .filter((tab) => list.some((n) => n.name === tab.name)),
       );
-      if (selectedNote) {
-        const updated = list.find((n) => n.name === selectedNote.name);
-        setSelectedNote(updated ?? null);
-      }
+      // 関数型アップデートで stale closure を回避（await 後に selectedNote が変わっていても安全）
+      setSelectedNote((prev) => {
+        if (!prev) return null;
+        return list.find((n) => n.name === prev.name) ?? null;
+      });
       // バックグラウンドで全自動MOCを更新
     } finally {
       setIsLoading(false);
