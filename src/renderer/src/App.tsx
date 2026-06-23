@@ -14,6 +14,7 @@ import {
   Loader2,
   Lock,
   Network,
+  Pencil,
   Plus,
   Save,
   Search,
@@ -2296,6 +2297,14 @@ export default function App() {
                 title="ローカルグラフを開く"
               >
                 <Network className="h-4 w-4" />
+              </button>
+              <button
+                className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
+                onClick={() => selectedNote && renameNote(selectedNote)}
+                disabled={!selectedNote}
+                title="ファイル名変更"
+              >
+                <Pencil className="h-4 w-4" />
               </button>
               <button
                 className="rounded p-2 text-gray-400 hover:bg-white/10 hover:text-gray-100 disabled:opacity-40"
