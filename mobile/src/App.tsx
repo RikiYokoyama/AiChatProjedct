@@ -182,6 +182,13 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // privateノートの displayName をローカルマップから解決（既存 displayName を優先）
+  const resolveDisplayName = useCallback((note: Note): string | undefined => {
+    if (note.displayName) return note.displayName;
+    const localName = privateNameMapRef.current[note.name];
+    return localName ?? undefined;
+  }, []);
+
   // リモートリストと現在の state をマージ（sha・content は現在値を優先）
   const mergeRemoteNotes = useCallback((remoteList: { name: string; remotePath: string; sha: string; updatedAt: string }[]) => {
     setNotes(prev => {
@@ -275,7 +282,7 @@ export default function App() {
           }
           setNotes(prev => prev.map(n =>
             n.name === noteTabSelectedName
-              ? { ...buildNote(n.name, content), remotePath, sha: newSha || n.sha }
+              ? { ...n, ...buildNote(n.name, content), remotePath, sha: newSha || n.sha }
               : n
           ));
         } catch (err) {
@@ -287,7 +294,7 @@ export default function App() {
         await writeNote(noteTabSelectedName, content);
         setNotes((prev) =>
           prev.map((n) =>
-            n.name === noteTabSelectedName ? buildNote(n.name, content) : n,
+            n.name === noteTabSelectedName ? { ...n, ...buildNote(n.name, content) } : n,
           ),
         );
       }
@@ -531,10 +538,10 @@ export default function App() {
           if (cfg2.gitRemoteUrl) {
             const currentSha = notesRef.current.find(n => n.name === name)?.sha;
             const savedSha = await saveNoteToGitHub(cfg2.gitRemoteUrl, remotePath, finalContent, currentSha);
-            setNotes(prev => prev.map(n => n.name === name ? { ...buildNote(n.name, finalContent), remotePath, sha: savedSha || n.sha } : n));
+            setNotes(prev => prev.map(n => n.name === name ? { ...n, ...buildNote(n.name, finalContent), remotePath, sha: savedSha || n.sha } : n));
           } else {
             await writeNote(name, finalContent);
-            setNotes(prev => prev.map(n => n.name === name ? buildNote(n.name, finalContent) : n));
+            setNotes(prev => prev.map(n => n.name === name ? { ...n, ...buildNote(n.name, finalContent) } : n));
           }
           const parsed = parseGeneratedPrompt(fullText);
           setPendingPrompt(parsed ?? {
@@ -603,10 +610,10 @@ export default function App() {
         if (cfg2.gitRemoteUrl) {
           const currentSha = notesRef.current.find(n => n.name === name)?.sha;
           const savedSha = await saveNoteToGitHub(cfg2.gitRemoteUrl, remotePath, finalContent, currentSha);
-          setNotes(prev => prev.map(n => n.name === name ? { ...buildNote(n.name, finalContent), remotePath, sha: savedSha || n.sha } : n));
+          setNotes(prev => prev.map(n => n.name === name ? { ...n, ...buildNote(n.name, finalContent), remotePath, sha: savedSha || n.sha } : n));
         } else {
           await writeNote(name, finalContent);
-          setNotes(prev => prev.map(n => n.name === name ? buildNote(n.name, finalContent) : n));
+          setNotes(prev => prev.map(n => n.name === name ? { ...n, ...buildNote(n.name, finalContent) } : n));
         }
         setIsGenerating(false);
       },
@@ -781,7 +788,7 @@ export default function App() {
     const note = notes.find(n => n.name === name);
     if (config.gitRemoteUrl && note?.remotePath) {
       const newSha = await saveNoteToGitHub(config.gitRemoteUrl, note.remotePath, nextContent, note.sha);
-      setNotes(prev => prev.map(n => n.name === name ? { ...buildNote(n.name, nextContent), remotePath: note.remotePath, sha: newSha || n.sha } : n));
+      setNotes(prev => prev.map(n => n.name === name ? { ...n, ...buildNote(n.name, nextContent), remotePath: note.remotePath, sha: newSha || n.sha } : n));
     } else {
       await writeNote(name, nextContent);
       await refreshNotes();
