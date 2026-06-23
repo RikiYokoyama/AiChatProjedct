@@ -47,6 +47,7 @@ import {
   fetchNoteContentFromGitHub,
   saveNoteToGitHub,
   deleteNoteOnGitHub,
+  removeEntryFromIndex,
   currentYearMonth,
   addEntryToIndex,
   appendToMasterMoc,
@@ -266,7 +267,7 @@ export default function App() {
         const remotePath = note?.remotePath ?? `notes/${noteTabSelectedName}`;
         try {
           let sha = note?.sha;
-          let newSha: string;
+          let newSha: string | undefined;
           try {
             newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, content, sha);
           } catch (firstErr: unknown) {
@@ -711,11 +712,15 @@ export default function App() {
 
   async function deleteNoteAction(note: Note) {
     if (!window.confirm(`「${note.displayName ?? noteTitle(note.name)}」を削除しますか？`)) return;
-    if (config.gitRemoteUrl && note.remotePath && note.sha) {
-      await deleteNoteOnGitHub(config.gitRemoteUrl, note.remotePath, note.sha);
-    } else {
-      await removeNote(note.name);
+
+    // 計画D: state から先行削除（refreshNotes後の復活を防ぐ）
+    setNotes((prev) => prev.filter((n) => n.name !== note.name));
+    if (noteTabSelectedName === note.name) {
+      setNoteTabSelectedName(null);
+      setNoteTabContent('');
     }
+    setRecentNames((prev) => prev.filter((n) => n !== note.name));
+
     // private タイムスタンプノートの場合、ローカルマップからも削除
     if (/^\d{13,}\.md$/.test(note.name)) {
       const newMap = { ...privateNameMapRef.current };
@@ -723,12 +728,30 @@ export default function App() {
       privateNameMapRef.current = newMap;
       savePrivateNameMap(newMap).catch(() => {});
     }
-    if (noteTabSelectedName === note.name) {
-      setNoteTabSelectedName(null);
-      setNoteTabContent('');
+
+    // 計画B: GitHub 削除（try-catch で後処理を保証）
+    if (config.gitRemoteUrl && note.remotePath) {
+      try {
+        let sha = note.sha;
+        // 計画A: sha が undefined/空 の場合は GitHub から最新 sha を取得
+        if (!sha) {
+          try {
+            const latest = await fetchNoteContentFromGitHub(config.gitRemoteUrl, note.remotePath);
+            sha = latest.sha;
+          } catch { /* 取得失敗時は sha なしで試みる */ }
+        }
+        if (sha) {
+          await deleteNoteOnGitHub(config.gitRemoteUrl, note.remotePath, sha);
+        }
+        // 計画C: _index.json からエントリを削除
+        removeEntryFromIndex(config.gitRemoteUrl, note.name).catch(() => {});
+      } catch (err) {
+        console.error('GitHub削除エラー:', err);
+        alert('GitHubからの削除に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    } else {
+      await removeNote(note.name).catch(() => {});
     }
-    setRecentNames((prev) => prev.filter((n) => n !== note.name));
-    await refreshNotes();
   }
 
   async function toggleArchive(note: Note) {

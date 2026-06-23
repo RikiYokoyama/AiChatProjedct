@@ -441,7 +441,7 @@ export async function saveNoteToGitHub(
   remotePath: string,
   content: string,
   sha?: string,
-): Promise<string> {
+): Promise<string | undefined> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) throw new Error('GitHubの設定が不正です');
   let toWrite = content;
@@ -451,8 +451,7 @@ export async function saveNoteToGitHub(
     toWrite = await vaultEncrypt(content, vaultPassword);
   }
   const sync = new GitHubSync(token, repo, branch);
-  const newSha = await sync.putFile(remotePath, toWrite, sha);
-  return newSha ?? '';
+  return sync.putFile(remotePath, toWrite, sha);
 }
 
 // ---------- 保管庫の作成・解除（_vault.json で検証） ----------
@@ -577,4 +576,22 @@ export async function deleteNoteOnGitHub(
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) throw new Error('GitHubの設定が不正です');
   await new GitHubSync(token, repo, branch).deleteFile(remotePath, sha);
+}
+
+/** _index.json から指定エントリを削除（失敗しても無視） */
+export async function removeEntryFromIndex(
+  gitRemoteUrl: string,
+  name: string,
+): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return;
+  const sync = new GitHubSync(token, repo, branch);
+  try {
+    const file = await sync.fetchRemoteFile('_index.json');
+    const index = JSON.parse(file.content) as Array<{ name: string }>;
+    const filtered = index.filter(e => e.name !== name);
+    if (filtered.length !== index.length) {
+      await sync.putFile('_index.json', JSON.stringify(filtered, null, 2), file.sha);
+    }
+  } catch { /* silent */ }
 }
