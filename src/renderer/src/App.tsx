@@ -340,7 +340,10 @@ export default function App() {
     if (editMode === 'edit') {
       savedPreviewScroll.current = previewDivRef.current?.scrollTop ?? 0;
       requestAnimationFrame(() => {
-        if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
+        if (editorRef.current) {
+          editorRef.current.scrollTop = savedEditorScroll.current;
+          editorRef.current.focus();
+        }
       });
     } else {
       savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
