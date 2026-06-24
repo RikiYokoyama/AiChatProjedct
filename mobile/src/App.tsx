@@ -498,11 +498,10 @@ export default function App() {
       privateNameMapRef.current = { ...privateNameMapRef.current, [privateTimestampName]: displayTitle };
       savePrivateNameMap(privateNameMapRef.current).catch(() => {});
     }
-    // _index.json と moc/moc.md を非同期で更新（private は公開MOCに載せない）
+    // _index.json を非同期で更新（private は除外）
     if (config.gitRemoteUrl && !isPrivate) {
       const url = config.gitRemoteUrl;
       addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
-      appendToMasterMoc(url, name).catch(console.error);
     }
     setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);

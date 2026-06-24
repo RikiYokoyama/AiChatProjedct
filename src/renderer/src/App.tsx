@@ -700,32 +700,6 @@ export default function App() {
     return map;
   }, [notes]);
 
-  async function appendToMasterMocLocal(noteName: string) {
-    if (
-      noteName.startsWith('private/') ||
-      noteName.startsWith('moc/') ||
-      noteName.startsWith('_')
-    ) {
-      return;
-    }
-    const mocPath = 'moc/_All_Notes_MOC.md';
-    const displayName = noteName.replace(/\.md$/i, '');
-    const dateStr = new Date().toISOString().slice(0, 10);
-    const newLine = `- [[${displayName}]] — ${dateStr} 追加\n`;
-    try {
-      let existingContent = '';
-      try {
-        existingContent = await window.electronAPI.readNote(mocPath);
-      } catch (e) {
-        // 存在しない場合は空
-      }
-      const updated = existingContent.trimEnd() + '\n' + newLine;
-      await window.electronAPI.saveNote({ filename: mocPath, content: updated });
-    } catch (err) {
-      console.error('Failed to append to master MOC:', err);
-    }
-  }
-
   async function generateAutoMoc(list: any[], force = false) {
     try {
       const targetFilename = 'moc/_All_Notes_MOC.md';
@@ -972,7 +946,6 @@ export default function App() {
     }
     await loadNotesList();
     const savedName = result.name ?? name;
-    await appendToMasterMocLocal(savedName);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
     setRibbonView('notes');
@@ -1051,7 +1024,6 @@ export default function App() {
     setNewNoteName('Untitled');
     await loadNotesList();
     const savedName = result.name ?? name;
-    await appendToMasterMocLocal(savedName);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
 
@@ -1507,7 +1479,6 @@ export default function App() {
         const result = await window.electronAPI.saveNote({ filename, content: fullContent });
         if (result.success) {
           const savedName = result.name ?? filename;
-          await appendToMasterMocLocal(savedName);
           const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
           setSelectedNote(note);
           setContent(fullContent);
