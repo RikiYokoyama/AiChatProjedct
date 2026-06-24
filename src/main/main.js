@@ -94,6 +94,8 @@ function saveConfig(newConfig) {
     if (appConfig.notesPath !== prevNotesPath) {
       startFileWatcher(appConfig.notesPath);
     }
+    // git URLが設定されたら定期pullを再起動
+    startPeriodicPull();
 
     return { success: true };
   } catch (err) {
@@ -322,6 +324,7 @@ function createWindow() {
 
   loadConfig();
   startFileWatcher(appConfig.notesPath);
+  startPeriodicPull();
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
@@ -939,6 +942,39 @@ ipcMain.handle('startup-git-pull', async () => {
     return { success: false, error: err.message };
   }
 });
+
+// ---------- 定期 git pull（モバイルからの変更を自動取得） ----------
+let periodicPullTimer = null;
+let isPulling = false;
+
+async function periodicPull() {
+  if (isPulling) return;
+  if (!appConfig.notesPath || !appConfig.gitRemoteUrl) return;
+  if (!fs.existsSync(appConfig.notesPath)) return;
+  isPulling = true;
+  try {
+    const git = simpleGit(appConfig.notesPath);
+    const isRepo = await git.checkIsRepo();
+    if (!isRepo) return;
+    let branchName = 'main';
+    try {
+      const branches = await git.branch();
+      const raw = branches.current || '';
+      branchName = /^[a-zA-Z0-9/_.-]+$/.test(raw) ? raw : 'main';
+    } catch {}
+    await git.pull('origin', branchName, { '--rebase': 'true' });
+    mainWindow?.webContents.send('notes-changed');
+  } catch (err) {
+    console.warn('Periodic git pull failed:', err.message);
+  } finally {
+    isPulling = false;
+  }
+}
+
+function startPeriodicPull() {
+  if (periodicPullTimer) clearInterval(periodicPullTimer);
+  periodicPullTimer = setInterval(periodicPull, 5 * 60 * 1000); // 5分ごと
+}
 
 ipcMain.handle('open-directory-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {

@@ -1723,7 +1723,11 @@ export default function App() {
       setVaultUnlocked(false);
       setPrivateMode(false);
     });
-    return () => { unsubscribe(); unsubVault(); };
+    // 定期git pullでモバイル変更（削除含む）を自動反映
+    const unsubNotes = window.electronAPI.onNotesChanged(() => {
+      loadNotesList();
+    });
+    return () => { unsubscribe(); unsubVault(); unsubNotes(); };
   }, []);
 
   useEffect(() => {

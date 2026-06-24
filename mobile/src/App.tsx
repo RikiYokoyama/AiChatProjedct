@@ -692,7 +692,9 @@ export default function App() {
     const now = new Date().toLocaleString('ja-JP');
     const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
     const ym = currentYearMonth();
-    const remotePath = `memos/${ym}/${name}`;
+    const isPrivate = privateMode;
+    const privateTimestampName = `${Date.now()}.md`;
+    const remotePath = isPrivate ? `private/${privateTimestampName}` : `notes/${ym}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -704,8 +706,15 @@ export default function App() {
       alert('メモの作成に失敗しました: ' + (err instanceof Error ? err.message : String(err)));
       return;
     }
-    const newNote: Note = { ...buildNote(name, initial), remotePath, sha: newSha };
-    if (config.gitRemoteUrl) {
+    const newNote: Note = isPrivate
+      ? { ...buildNote(name, initial), name: privateTimestampName, remotePath, sha: newSha, displayName: noteTitle(name) }
+      : { ...buildNote(name, initial), remotePath, sha: newSha };
+    if (isPrivate) {
+      const displayTitle = noteTitle(name);
+      privateNameMapRef.current = { ...privateNameMapRef.current, [privateTimestampName]: displayTitle };
+      savePrivateNameMap(privateNameMapRef.current).catch(() => {});
+    }
+    if (config.gitRemoteUrl && !isPrivate) {
       const url = config.gitRemoteUrl;
       addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
     }

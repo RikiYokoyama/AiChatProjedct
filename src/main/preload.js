@@ -44,5 +44,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeListener('git-status-changed', subscription);
     };
+  },
+
+  // 定期pull後のノートリスト更新通知
+  onNotesChanged: (callback) => {
+    const subscription = () => callback();
+    ipcRenderer.on('notes-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('notes-changed', subscription);
+    };
   }
 });

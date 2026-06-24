@@ -62,5 +62,6 @@ interface Window {
     vaultUnlock: (password: string) => Promise<{ success: boolean; error?: string }>;
     vaultLock: () => Promise<{ success: boolean }>;
     onVaultLocked: (callback: () => void) => () => void;
+    onNotesChanged: (callback: () => void) => () => void;
   };
 }
