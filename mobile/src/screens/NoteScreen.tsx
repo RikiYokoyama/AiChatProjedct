@@ -1,5 +1,5 @@
 import { useRef, useMemo, useState } from 'react';
-import { BookOpen, Brackets, ChevronDown, ChevronRight, Check, Edit3, Eye, FileText, FolderClosed, FolderOpen, List, ListTree, Loader2, Mic, MicOff, Search, Send, Sparkles, Tag, X, Zap } from 'lucide-react';
+import { BookOpen, Brackets, ChevronDown, ChevronRight, Check, Edit3, Eye, FileText, FolderClosed, FolderOpen, Heading2, List, ListOrdered, ListTree, Loader2, Mic, MicOff, Network, Search, Send, Sparkles, Tag, Trash2, X, Zap } from 'lucide-react';
 
 function buildMobileFileTree(notes: { name: string; remotePath?: string }[]): Record<string, { name: string; remotePath?: string }[]> {
   const tree: Record<string, { name: string; remotePath?: string }[]> = {};
@@ -72,11 +72,13 @@ export default function NoteScreen({
   chatMode,
   chatModes,
   onChangeChatMode,
+  onMocRefChat,
   onAiAction,
   onAddTag,
   onRemoveTag,
   onBack,
   onRename,
+  onDelete,
 }: {
   notes: Note[];
   selectedNote: Note | null;
@@ -93,11 +95,13 @@ export default function NoteScreen({
   chatMode: string;
   chatModes: { id: string; label: string }[];
   onChangeChatMode: (mode: string) => void;
+  onMocRefChat: () => void;
   onAiAction: (action: 'title' | 'tags' | 'summary') => void;
   onAddTag: (tag: string) => void;
   onRemoveTag: (tag: string) => void;
   onBack: () => void;
   onRename: (note: Note, newName: string) => Promise<void>;
+  onDelete: (note: Note) => Promise<void>;
 }) {
   const existingNames = useMemo(() => {
     const s = new Set<string>();
@@ -127,8 +131,6 @@ export default function NoteScreen({
   const [showTagInput, setShowTagInput] = useState(false);
   const keyboardInset = useKeyboardInset();
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const savedPreviewScroll = useRef(0);
-  const savedEditorScroll = useRef(0);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameInput, setRenameInput] = useState('');
 
@@ -167,12 +169,32 @@ export default function NoteScreen({
     });
   }
 
+  function insertLinePrefix(prefix: string) {
+    const ta = editorRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const lineStart = content.lastIndexOf('\n', start - 1) + 1;
+    const lineEnd = content.indexOf('\n', start);
+    const line = content.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
+    let next: string;
+    let newCursor: number;
+    if (line.startsWith(prefix)) {
+      next = content.slice(0, lineStart) + line.slice(prefix.length) + content.slice(lineEnd === -1 ? content.length : lineEnd);
+      newCursor = Math.max(lineStart, start - prefix.length);
+    } else {
+      next = content.slice(0, lineStart) + prefix + content.slice(lineStart);
+      newCursor = start + prefix.length;
+    }
+    onChangeContent(next);
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(newCursor, newCursor); });
+  }
+
   function generateFromTitle() {
     if (!selectedNote || isGenerating) return;
     onSend(selectedNote.displayName ?? noteTitle(selectedNote.name));
   }
 
-  // スワイプ操作: 左端から右スワイプ→戻る、それ以外→編集/プレビュー切替
+  // スワイプ操作: 右スワイプ→前のノート、左スワイプ→次のノート
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
   const onTouchStart = (e: React.TouchEvent) => {
@@ -183,26 +205,16 @@ export default function NoteScreen({
     const dx = e.changedTouches[0].clientX - touchStartX.current;
     const dy = e.changedTouches[0].clientY - touchStartY.current;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      if (dx > 0 && touchStartX.current < 40) {
-        // 左端から右スワイプ → ノート一覧に戻る
-        onBack();
+      if (!selectedNote) return;
+      const idx = notes.findIndex((n) => n.name === selectedNote.name);
+      if (dx > 0) {
+        // 右スワイプ → 前のノート
+        const prev = notes[idx - 1];
+        if (prev) onSelectNote(prev);
       } else {
-        // それ以外の横スワイプ → 編集/プレビュー切替（スクロール位置を保存・復元）
-        if (dx < 0) {
-          // preview → edit
-          savedPreviewScroll.current = previewRef.current?.scrollTop ?? 0;
-          setEditMode('edit');
-          requestAnimationFrame(() => {
-            if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
-          });
-        } else {
-          // edit → preview
-          savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
-          setEditMode('preview');
-          requestAnimationFrame(() => {
-            if (previewRef.current) previewRef.current.scrollTop = savedPreviewScroll.current;
-          });
-        }
+        // 左スワイプ → 次のノート
+        const next = notes[idx + 1];
+        if (next) onSelectNote(next);
       }
     }
   };
@@ -254,21 +266,7 @@ export default function NoteScreen({
         {selectedNote && (
           <>
             <button
-              onClick={() => {
-                if (editMode === 'edit') {
-                  savedEditorScroll.current = editorRef.current?.scrollTop ?? 0;
-                  setEditMode('preview');
-                  requestAnimationFrame(() => {
-                    if (previewRef.current) previewRef.current.scrollTop = savedPreviewScroll.current;
-                  });
-                } else {
-                  savedPreviewScroll.current = previewRef.current?.scrollTop ?? 0;
-                  setEditMode('edit');
-                  requestAnimationFrame(() => {
-                    if (editorRef.current) editorRef.current.scrollTop = savedEditorScroll.current;
-                  });
-                }
-              }}
+              onClick={() => setEditMode(editMode === 'edit' ? 'preview' : 'edit')}
               className="flex items-center gap-1 rounded-xl bg-white/5 px-3 py-2 text-xs text-gray-300 active:bg-white/10"
             >
               {editMode === 'edit' ? <Eye className="h-4 w-4" /> : <Edit3 className="h-4 w-4" />}
@@ -280,6 +278,17 @@ export default function NoteScreen({
               title="ファイル名変更"
             >
               <FileText className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm(`「${selectedNote.displayName ?? noteTitle(selectedNote.name)}」を削除しますか？`)) {
+                  onDelete(selectedNote);
+                }
+              }}
+              className="rounded-xl bg-white/5 p-2 text-red-400 active:bg-white/10"
+              title="削除"
+            >
+              <Trash2 className="h-4 w-4" />
             </button>
           </>
         )}
@@ -356,22 +365,26 @@ export default function NoteScreen({
             <>
               <ToolbarButton icon={editorSpeech.isListening ? <MicOff className="h-4 w-4 text-red-400" /> : <Mic className="h-4 w-4" />} label={editorSpeech.isListening ? '停止' : '音声入力'} disabled={!editorSpeech.supported} onClick={() => editorSpeech.isListening ? editorSpeech.stop() : editorSpeech.start()} />
               <div className="h-5 w-px shrink-0 bg-white/10" />
+              <ToolbarButton icon={<Heading2 className="h-4 w-4" />} onClick={() => insertLinePrefix('## ')} />
+              <ToolbarButton icon={<List className="h-4 w-4" />} onClick={() => insertLinePrefix('- ')} />
+              <ToolbarButton icon={<ListOrdered className="h-4 w-4" />} onClick={() => insertLinePrefix('1. ')} />
+              <div className="h-5 w-px shrink-0 bg-white/10" />
             </>
           )}
-          <ToolbarButton icon={<Zap className="h-4 w-4 text-yellow-400" />} label="タイトルから生成" onClick={generateFromTitle} disabled={isGenerating} />
-          <div className="h-5 w-px shrink-0 bg-white/10" />
-          <ToolbarButton icon={<Tag className="h-4 w-4" />} label="タグ生成" onClick={() => onAiAction('tags')} />
-          <ToolbarButton icon={<ListTree className="h-4 w-4" />} label="要約" onClick={() => onAiAction('summary')} />
+          <ToolbarButton icon={<Zap className="h-4 w-4 text-yellow-400" />} onClick={generateFromTitle} disabled={isGenerating} />
+          <ToolbarButton icon={<Tag className="h-4 w-4" />} onClick={() => onAiAction('tags')} />
+          <ToolbarButton icon={<ListTree className="h-4 w-4" />} onClick={() => onAiAction('summary')} />
+          <ToolbarButton icon={<Network className="h-4 w-4 text-violet-400" />} onClick={onMocRefChat} disabled={isGenerating} />
           {selectedNote && (
             <>
               <div className="h-5 w-px shrink-0 bg-white/10" />
-              <ToolbarButton icon={<ListTree className="h-4 w-4 text-indigo-400" />} label="アウトライン" onClick={() => setShowOutline(true)} />
+              <ToolbarButton icon={<ListTree className="h-4 w-4 text-indigo-400" />} onClick={() => setShowOutline(true)} />
             </>
           )}
           {editMode === 'edit' && (
             <>
               <div className="h-5 w-px shrink-0 bg-white/10" />
-              <ToolbarButton icon={<Brackets className="h-4 w-4" />} label="[[リンク]]" onClick={wrapSelectionWithWikiLink} />
+              <ToolbarButton icon={<Brackets className="h-4 w-4" />} onClick={wrapSelectionWithWikiLink} />
             </>
           )}
         </div>
@@ -421,7 +434,6 @@ export default function NoteScreen({
             {chatModes.find((m) => m.id === chatMode)?.label ?? chatMode}
             <ChevronDown className={`h-3 w-3 transition-transform ${showModePicker ? 'rotate-180' : ''}`} />
           </button>
-
           <textarea
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
@@ -764,9 +776,9 @@ export default function NoteScreen({
   );
 }
 
-function ToolbarButton({ icon, label, onClick, disabled }: { icon: React.ReactNode; label: string; onClick: () => void; disabled?: boolean }) {
+function ToolbarButton({ icon, label, onClick, disabled }: { icon: React.ReactNode; label?: string; onClick: () => void; disabled?: boolean }) {
   return (
-    <button onClick={onClick} disabled={disabled} className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/5 px-3 py-1.5 text-xs text-gray-300 active:bg-white/15 disabled:opacity-40">
+    <button onPointerDown={(e) => e.preventDefault()} onClick={onClick} disabled={disabled} className={`flex shrink-0 items-center gap-1.5 rounded-full bg-white/5 text-xs text-gray-300 active:bg-white/15 disabled:opacity-40 ${label ? 'px-3 py-1.5' : 'p-2'}`}>
       {icon}{label}
     </button>
   );

@@ -96,6 +96,7 @@ function saveConfig(newConfig) {
     }
     // git URLが設定されたら定期pullを再起動
     startPeriodicPull();
+    ensureGitAttributes(appConfig.notesPath);
 
     return { success: true };
   } catch (err) {
@@ -325,6 +326,7 @@ function createWindow() {
   loadConfig();
   startFileWatcher(appConfig.notesPath);
   startPeriodicPull();
+  ensureGitAttributes(appConfig.notesPath);
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
@@ -619,6 +621,8 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
     
     for (const file of list) {
       if (file.startsWith('.')) continue; // 隠しフォルダや.obsidian、.gitは無視
+      if (file === 'backup') continue; // モバイルと統一：backup/ は除外
+      if (file.startsWith('_') && file.endsWith('.md')) continue; // モバイルと統一：_始まりファイルは除外
       const filePath = path.join(dirPath, file);
       
       tasks.push(async () => {
@@ -642,11 +646,6 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
                     displayName = decrypted.split('\n')[0].replace(/^#+\s*/, '').trim() || null;
                     tags = extractTags(decrypted);
                     createdAt = extractCreatedAt(decrypted);
-                    // タイムスタンプIDのノートを _names.enc に登録（モバイル用マイグレーション）
-                    const basename = path.basename(relativePath);
-                    if (/^\d{13,}\.md$/.test(basename) && displayName) {
-                      updatePrivateNamesEnc(basePath, basename, displayName).catch(() => {});
-                    }
                   }
                 } catch (err) {
                   console.error(`Private decrypt failed (${relativePath}):`, err.message);
@@ -791,7 +790,6 @@ ipcMain.handle('save-note', async (event, { filename, content }) => {
 
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, toWrite, 'utf8');
-    updateIndex();
     return { success: true, path: filePath, name: relName };
   } catch (err) {
     console.error('Failed to save note:', err);
@@ -976,12 +974,60 @@ function startPeriodicPull() {
   periodicPullTimer = setInterval(periodicPull, 5 * 60 * 1000); // 5分ごと
 }
 
+// ノートリポジトリに .gitattributes を設定（競合防止）
+function ensureGitAttributes(notesPath) {
+  if (!notesPath || !fs.existsSync(notesPath)) return;
+  const gitAttrsPath = path.join(notesPath, '.gitattributes');
+  const desired = [
+    '# 追記系ファイルは行単位マージで競合を防ぐ',
+    'moc/_All_Notes_MOC.md merge=union',
+    '',
+  ].join('\n');
+  try {
+    const existing = fs.existsSync(gitAttrsPath) ? fs.readFileSync(gitAttrsPath, 'utf8') : '';
+    if (!existing.includes('merge=union')) {
+      fs.writeFileSync(gitAttrsPath, existing ? existing.trimEnd() + '\n' + desired : desired, 'utf8');
+    }
+  } catch (err) {
+    console.warn('ensureGitAttributes failed:', err.message);
+  }
+}
+
 ipcMain.handle('open-directory-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
   });
 
   return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('open-md-file-dialog', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'MDファイルを開く',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+    defaultPath: appConfig.notesPath,
+  });
+  if (result.canceled) return null;
+  // notesPath 相対パスに変換して返す
+  return result.filePaths.map((fp) => {
+    const rel = path.relative(appConfig.notesPath, fp).replace(/\\/g, '/');
+    return { absolutePath: fp, relativePath: rel };
+  });
+});
+
+ipcMain.handle('save-md-file-dialog', async (event, defaultDir) => {
+  const defaultPath = defaultDir
+    ? path.join(appConfig.notesPath, defaultDir, '新規ノート.md')
+    : path.join(appConfig.notesPath, '新規ノート.md');
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: '新規MDファイルを作成',
+    defaultPath,
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  const rel = path.relative(appConfig.notesPath, result.filePath).replace(/\\/g, '/');
+  return { absolutePath: result.filePath, relativePath: rel };
 });
 
 // HTMLからタグを除去してプレーンテキストを抽出する簡易クリーニング関数

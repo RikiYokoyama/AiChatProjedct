@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import BottomNav, { Tab } from './components/BottomNav';
 import FilesScreen from './screens/NotesScreen';
 import NoteScreen from './screens/NoteScreen';
@@ -24,6 +24,7 @@ import {
   applyTagsToContent,
   buildNote,
   cleanFilename,
+  extractCreatedAt,
   initialNoteContent,
   noteTitle,
 } from './lib/notes';
@@ -85,6 +86,8 @@ export default function App() {
   const [vaultError, setVaultError] = useState('');
   const [pendingPrivateNote, setPendingPrivateNote] = useState<Note | null>(null);
   const [privateMode, setPrivateMode] = useState(false);
+  const [folderFilter, setFolderFilter] = useState<string | null>(() => localStorage.getItem('mobile_folderFilter') || null);
+  const saveFolderFilter = (v: string | null) => { setFolderFilter(v); if (v) localStorage.setItem('mobile_folderFilter', v); else localStorage.removeItem('mobile_folderFilter'); };
 
   const [recentNames, setRecentNames] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -224,7 +227,7 @@ export default function App() {
 
   // ---------- アプリ復帰時自動更新（Phase 8） ----------
   useEffect(() => {
-    const MIN_REFRESH_MS = 60 * 1000;
+    const MIN_REFRESH_MS = 30 * 1000;
     let lastRefresh = 0;
 
     const handleVisibilityChange = async () => {
@@ -447,9 +450,11 @@ export default function App() {
   const isPrivateNote = (n: Note) => (n.remotePath || n.name).startsWith('private/');
   // グラフは常にprivate除外
   const visibleNotes = useMemo(() => notes.filter((n) => !isPrivateNote(n)), [notes]);
-  // ファイル一覧: privateMode=trueならprivate専用、それ以外は通常（private除外）
+  // ファイル一覧: privateMode=trueならprivate専用、それ以外は通常（private除外）、作成日時降順
   const filesNotes = useMemo(
-    () => notes.filter((n) => (privateMode ? isPrivateNote(n) : !isPrivateNote(n))),
+    () => notes
+      .filter((n) => (privateMode ? isPrivateNote(n) : !isPrivateNote(n)))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
     [notes, privateMode],
   );
 
@@ -474,7 +479,8 @@ export default function App() {
     const isPrivate = privateMode;
     // private/ はタイムスタンプIDで保存（GitHub上でファイル名を匿名化）
     const privateTimestampName = `${Date.now()}.md`;
-    const remotePath = isPrivate ? `private/${privateTimestampName}` : `notes/${ym}/${name}`;
+    const noteDir = folderFilter ?? `notes/${ym}`;
+    const remotePath = isPrivate ? `private/${privateTimestampName}` : `${noteDir}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -498,10 +504,12 @@ export default function App() {
       privateNameMapRef.current = { ...privateNameMapRef.current, [privateTimestampName]: displayTitle };
       savePrivateNameMap(privateNameMapRef.current).catch(() => {});
     }
-    // _index.json を非同期で更新（private は除外）
+    // _index.json と moc/_All_Notes_MOC.md を非同期で更新（private は除外）
     if (config.gitRemoteUrl && !isPrivate) {
       const url = config.gitRemoteUrl;
-      addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
+      const createdAt = extractCreatedAt(initial) ?? new Date().toISOString();
+      addEntryToIndex(url, { name, path: remotePath, updatedAt: createdAt, isMoc: false }).catch(console.error);
+      appendToMasterMoc(url, name, remotePath).catch(console.error);
     }
     setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);
@@ -514,7 +522,7 @@ export default function App() {
     // prompt-gen モード
     if (modeToUse === 'prompt-gen') {
       const client = new GeminiClient(config.geminiApiKey);
-      const userPrompt = `「${firstLine}」というテーマ・用途に合ったカスタムプロンプトを作成してください。`;
+      const userPrompt = `「${title.trim()}」というテーマ・用途に合ったカスタムプロンプトを作成してください。`;
       const nextHistory: ChatMessage[] = [{ role: 'user', content: userPrompt }];
       setChatHistory(nextHistory);
       setStreamedText('');
@@ -561,54 +569,17 @@ export default function App() {
     let acc = initial;
     const client = new GeminiClient(config.geminiApiKey);
     const systemPrompt = getSystemPrompt(modeToUse);
-
-    // 新規作成時のMOCコンテキスト: タイトルキーワードで関連ノートを絞り込む
-    const createActiveNotes = notes.filter(
-      (n) =>
-        !n.name.startsWith('private/') &&
-        !n.name.startsWith('_') &&
-        !n.name.startsWith('moc/') &&
-        n.name.replace(/\.md$/i, '').length <= 40
-    );
-    const createKeywords = noteTitle(name).toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
-    const createScored = createActiveNotes.map((note) => {
-      let score = 0;
-      const nameLower = (note.displayName ?? note.name).toLowerCase();
-      for (const word of createKeywords) { if (nameLower.includes(word)) score += 10; }
-      return { note, score };
-    });
-    let createMatched = createScored.filter((i) => i.score > 0).sort((a, b) => b.score - a.score).map((i) => i.note);
-    if (createMatched.length === 0) {
-      createMatched = createActiveNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 30);
-    } else {
-      createMatched = createMatched.slice(0, 50);
-    }
-    let createMocContent = '';
-    if (createMatched.length > 0) {
-      createMocContent = '関連する可能性のある既存ノートの一覧:\n';
-      for (const note of createMatched) {
-        const dn = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
-        const linkPath = (note.remotePath ?? note.name).replace(/\.md$/i, '');
-        createMocContent += `- [[${linkPath}|${dn}]]\n`;
-      }
-    }
-
+    const userPrompt = `「${title.trim()}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。`;
     await client.chatStream(
-      [
-        {
-          role: 'user',
-          content: `「${noteTitle(name)}」というテーマに関する詳細な解説記事をMarkdown形式で作成してください。見出しや箇条書きを用いて美しく構成し、前置きなどは含めず本文のみを出力してください。`,
-        },
-      ],
+      [{ role: 'user', content: userPrompt }],
       systemPrompt,
       aiModelMode,
       null,
-      (chunk) => {
-        acc += chunk;
-        setNoteTabContent(acc);
-      },
+      (chunk) => { acc += chunk; setStreamedText((prev) => prev + chunk); },
       async (fullText) => {
-        const finalContent = initial + fullText;
+        setStreamedText('');
+        setIsGenerating(false);
+        const finalContent = `${initial.trimEnd()}\n\n${fullText}`;
         setNoteTabContent(finalContent);
         const cfg2 = configRef.current;
         if (cfg2.gitRemoteUrl) {
@@ -619,13 +590,12 @@ export default function App() {
           await writeNote(name, finalContent);
           setNotes(prev => prev.map(n => n.name === name ? { ...n, ...buildNote(n.name, finalContent) } : n));
         }
-        setIsGenerating(false);
       },
       (err) => {
         setIsGenerating(false);
         alert(err instanceof Error ? err.message : String(err));
       },
-      { mocContext: createMocContent || null },
+      { },
     );
   }
 
@@ -677,11 +647,14 @@ export default function App() {
     setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);
     setTab('note');
+    if (config.gitRemoteUrl) {
+      appendToMasterMoc(config.gitRemoteUrl, name, remotePath).catch(console.error);
+    }
   }
 
   // メモ作成（タイトルだけのシンプルノート）
   async function createMemo(title: string) {
-    const clean = title.trim();
+    const clean = title.split('\n')[0].trim();
     if (!clean) return;
     let name = cleanFilename(clean);
     let counter = 1;
@@ -689,11 +662,13 @@ export default function App() {
       name = cleanFilename(`${clean} (${counter++})`);
     }
     const now = new Date().toLocaleString('ja-JP');
-    const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n`;
+    const bodyLines = title.split('\n').slice(1).join('\n').trim();
+    const initial = `# ${noteTitle(name)}\n\n作成日時: ${now}\n${bodyLines ? '\n' + bodyLines + '\n' : ''}`;
     const ym = currentYearMonth();
     const isPrivate = privateMode;
     const privateTimestampName = `${Date.now()}.md`;
-    const remotePath = isPrivate ? `private/${privateTimestampName}` : `notes/${ym}/${name}`;
+    const noteDir = folderFilter ?? `notes/${ym}`;
+    const remotePath = isPrivate ? `private/${privateTimestampName}` : `${noteDir}/${name}`;
     let newSha: string | undefined;
     try {
       if (config.gitRemoteUrl) {
@@ -715,7 +690,9 @@ export default function App() {
     }
     if (config.gitRemoteUrl && !isPrivate) {
       const url = config.gitRemoteUrl;
-      addEntryToIndex(url, { name, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(console.error);
+      const createdAt = extractCreatedAt(initial) ?? new Date().toISOString();
+      addEntryToIndex(url, { name, path: remotePath, updatedAt: createdAt, isMoc: false }).catch(console.error);
+      appendToMasterMoc(url, name, remotePath).catch(console.error);
     }
     setNotes(prev => [...prev, newNote]);
     selectNoteForNoteTab(newNote);
@@ -843,7 +820,11 @@ export default function App() {
       if (!window.confirm(`ファイル「${cleanName}」は存在しません。新しく作成しますか？`)) return;
 
       // GitHub に保存（createNote と同じ方式）
-      const clean = cleanFilename(cleanName);
+      let clean = cleanFilename(cleanName);
+      let counter = 1;
+      while (notes.some((n) => n.name.toLowerCase() === clean.toLowerCase())) {
+        clean = cleanFilename(`${cleanName} (${counter++})`);
+      }
       const initial = initialNoteContent(noteTitle(clean));
       const ym = currentYearMonth();
       const remotePath = `notes/${ym}/${clean}`;
@@ -852,7 +833,8 @@ export default function App() {
         const cfg = configRef.current;
         if (cfg.gitRemoteUrl) {
           newSha = await saveNoteToGitHub(cfg.gitRemoteUrl, remotePath, initial);
-          addEntryToIndex(cfg.gitRemoteUrl, { name: clean, path: remotePath, updatedAt: new Date().toISOString(), isMoc: false }).catch(() => {});
+          const createdAt = extractCreatedAt(initial) ?? new Date().toISOString();
+          addEntryToIndex(cfg.gitRemoteUrl, { name: clean, path: remotePath, updatedAt: createdAt, isMoc: false }).catch(() => {});
         } else {
           await writeNote(clean, initial);
         }
@@ -1125,7 +1107,7 @@ export default function App() {
     setPendingPrompt(null);
   }
 
-  async function sendChat(prompt: string) {
+  async function sendChat(prompt: string, forceMocRef = false) {
     if (!config.geminiApiKey) {
       alert('設定画面でGemini APIキーを入力してください');
       setTab('settings');
@@ -1147,51 +1129,56 @@ export default function App() {
       ? (rawNoteContext.replace(/\n*---\s*\n+##\s*User[\s\S]*$/m, '').trim() || null)
       : null;
 
-    // MOCコンテキスト: プロンプトのキーワードに関連するノートをAIに渡す
-    // モバイルはノートを遅延ロード（content=''）するためタグが空。ファイル名・表示名のみでスコアリング。
-    // note.name はファイル名のみ (例: MyNote.md)、フルパスは note.remotePath にある。
-    // private/ や moc/ フィルターは remotePath で判定する必要がある。
-    const activeNotes = notes.filter((n) => {
-      const path = n.remotePath ?? n.name;
-      return (
-        !path.startsWith('private/') &&
-        !path.startsWith('_') &&
-        !path.startsWith('moc/') &&
-        !n.name.startsWith('_') &&
-        // ユーザー質問文がそのままファイル名になった長すぎるノートを除外（正常なノート名は40文字以内）
-        n.name.replace(/\.md$/i, '').length <= 40
-      );
-    });
-    console.log(`[MOC] notes総数=${notes.length}, activeNotes=${activeNotes.length}`);
-    const words = prompt.toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
-    const scoredNotes = activeNotes.map((note) => {
-      let score = 0;
-      const nameLower = (note.displayName ?? note.name).toLowerCase();
-      const tags = (note.tags || []).map((t) => t.toLowerCase());
-      for (const word of words) {
-        if (nameLower.includes(word)) score += 10;
-        for (const tag of tags) { if (tag.includes(word)) score += 5; }
-      }
-      return { note, score };
-    });
-    let matchedNotes = scoredNotes.filter((i) => i.score > 0).sort((a, b) => b.score - a.score).map((i) => i.note);
-    if (matchedNotes.length === 0) {
-      // キーワードマッチなし → 全ノートを新着順で最大200件（タグ空問題の補償）
-      matchedNotes = activeNotes
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, 200);
-    } else {
-      matchedNotes = matchedNotes.slice(0, 50);
-    }
+    // moc-ref モード選択時のみMOCを構築して送信する
     let mocContent = '';
-    if (matchedNotes.length > 0) {
-      mocContent = '関連する可能性のある既存ノートの一覧:\n';
-      for (const note of matchedNotes) {
-        const displayName = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
-        const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
-        // PC版と同じフルパス形式 [[notes/2026-06/name|display]] で送る
-        const linkPath = (note.remotePath ?? note.name).replace(/\.md$/i, '');
-        mocContent += `- [[${linkPath}|${displayName}]]${tagsText}\n`;
+    if (forceMocRef) {
+      let allNotesMocContent = '';
+      if (config.gitRemoteUrl) {
+        try {
+          const mocFile = await fetchNoteContentFromGitHub(config.gitRemoteUrl, 'moc/_All_Notes_MOC.md');
+          allNotesMocContent = mocFile.content;
+        } catch {
+          // ファイルが存在しない場合は無視
+        }
+      }
+      const activeNotes = notes.filter((n) => {
+        const path = n.remotePath ?? n.name;
+        return (
+          !path.startsWith('private/') &&
+          !path.startsWith('_') &&
+          !path.startsWith('moc/') &&
+          !n.name.startsWith('_') &&
+          n.name.replace(/\.md$/i, '').length <= 40
+        );
+      });
+      const words = prompt.toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
+      const scoredNotes = activeNotes.map((note) => {
+        let score = 0;
+        const nameLower = (note.displayName ?? note.name).toLowerCase();
+        const tags = (note.tags || []).map((t) => t.toLowerCase());
+        for (const word of words) {
+          if (nameLower.includes(word)) score += 10;
+          for (const tag of tags) { if (tag.includes(word)) score += 5; }
+        }
+        return { note, score };
+      });
+      let matchedNotes = scoredNotes.filter((i) => i.score > 0).sort((a, b) => b.score - a.score).map((i) => i.note);
+      if (matchedNotes.length === 0) {
+        matchedNotes = activeNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 200);
+      } else {
+        matchedNotes = matchedNotes.slice(0, 50);
+      }
+      if (allNotesMocContent) {
+        mocContent += `【全ノート目次 (moc/_All_Notes_MOC.md)】\n${allNotesMocContent.trim()}\n\n`;
+      }
+      if (matchedNotes.length > 0) {
+        mocContent += '関連する可能性のある既存ノートの一覧:\n';
+        for (const note of matchedNotes) {
+          const displayName = note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+          const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
+          const linkPath = (note.remotePath ?? note.name).replace(/\.md$/i, '');
+          mocContent += `- [[${linkPath}|${displayName}]]${tagsText}\n`;
+        }
       }
     }
 
@@ -1290,6 +1277,8 @@ export default function App() {
             onVaultClick={handleVaultKeyClick}
             onSecretUnlock={trySecretUnlock}
             onOpen={(note) => { selectNoteForNoteTab(note); setTab('note'); }}
+            folderFilter={folderFilter}
+            onFolderFilterChange={saveFolderFilter}
             onCreate={createNote}
             onCreateMemo={createMemo}
             onCreateMoc={createMoc}
@@ -1331,11 +1320,13 @@ export default function App() {
             chatMode={chatMode}
             chatModes={chatModes}
             onChangeChatMode={handleChangeChatMode}
+            onMocRefChat={() => sendChat('このノートに関連する既存ノートを参照して、知識の繋がりや関連情報をまとめてください', true)}
             onAiAction={handleAiAction}
             onAddTag={(tag) => noteTabSelectedNote && updateTags(noteTabSelectedNote.name, noteTabContent, Array.from(new Set([...(noteTabSelectedNote.tags ?? []), tag.replace(/^#/, '')])))}
             onRemoveTag={(tag) => noteTabSelectedNote && updateTags(noteTabSelectedNote.name, noteTabContent, (noteTabSelectedNote.tags ?? []).filter((t) => t !== tag))}
             onBack={() => setTab('files')}
             onRename={handleRenameNote}
+            onDelete={async (note) => { await deleteNoteAction(note); setTab('files'); }}
           />
         )}
 

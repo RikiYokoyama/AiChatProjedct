@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameNote: (data) => ipcRenderer.invoke('rename-note', data),
   syncGit: () => ipcRenderer.invoke('sync-git'),
   openDirectoryDialog: () => ipcRenderer.invoke('open-directory-dialog'),
+  openMdFileDialog: () => ipcRenderer.invoke('open-md-file-dialog'),
+  saveMdFileDialog: (defaultDir) => ipcRenderer.invoke('save-md-file-dialog', defaultDir),
   deleteNote: (filename) => ipcRenderer.invoke('delete-note', filename),
   windowMoving: (delta) => ipcRenderer.send('window-moving', delta),
   fetchUrlText: (url) => ipcRenderer.invoke('fetch-url-text', url),

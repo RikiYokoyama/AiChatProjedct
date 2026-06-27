@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -228,6 +228,8 @@ export default function App() {
 
   // 新機能: ソート・サジェスト・Wikiリンクコンテキストメニュー状態
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'>('date-desc');
+  const [dirFilter, setDirFilter] = useState<string>(() => localStorage.getItem('pc_dirFilter') ?? '__all__');
+  const saveDirFilter = (v: string) => { setDirFilter(v); localStorage.setItem('pc_dirFilter', v); };
   const [wikiLinkContextMenu, setWikiLinkContextMenu] = useState<{
     x: number;
     y: number;
@@ -574,6 +576,16 @@ export default function App() {
   };
 
   // 全タグ一覧用データの抽出
+  const allDirs = useMemo(() => {
+    const set = new Set<string>();
+    notes.forEach((n) => {
+      if (n.name.startsWith('private/')) return;
+      const dir = n.name.includes('/') ? n.name.substring(0, n.name.lastIndexOf('/')) : '';
+      if (dir) set.add(dir);
+    });
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [notes]);
+
   const allTagsMap = useMemo(() => {
     const map: Record<string, Note[]> = {};
     for (const note of notes) {
@@ -594,6 +606,13 @@ export default function App() {
     let result = notes.filter((n) =>
       (privateMode ? n.name.startsWith('private/') : !n.name.startsWith('private/'))
     );
+    // ディレクトリ絞り込み
+    if (dirFilter && dirFilter !== '__all__') {
+      result = result.filter((n) => {
+        const dir = n.name.includes('/') ? n.name.substring(0, n.name.lastIndexOf('/')) : '';
+        return dir === dirFilter;
+      });
+    }
     // タグ絞り込み（コンボボックス）
     if (tagFilter) {
       result = result.filter((note) => (note.tags || []).includes(tagFilter));
@@ -636,7 +655,7 @@ export default function App() {
         return db.getTime() - da.getTime();
       }
     });
-  }, [notes, searchQuery, sortBy, privateMode, tagFilter]);
+  }, [notes, searchQuery, sortBy, privateMode, tagFilter, dirFilter]);
 
 
   // Wikiリンク解除処理
@@ -699,6 +718,36 @@ export default function App() {
     }
     return map;
   }, [notes]);
+
+  async function appendToMasterMocLocal(noteName: string) {
+    if (
+      noteName.startsWith('private/') ||
+      noteName === 'moc/_All_Notes_MOC.md' ||
+      noteName.startsWith('_')
+    ) return;
+    const mocPath = 'moc/_All_Notes_MOC.md';
+    const displayName = noteName.replace(/^.*\//, '').replace(/\.md$/i, '');
+    const linkPath = noteName.replace(/\.md$/i, '');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const newLine = `- [[${linkPath}|${displayName}]] — ${dateStr} 追加\n`;
+    try {
+      let existingContent = '';
+      try {
+        existingContent = await window.electronAPI.readNote(mocPath);
+      } catch {
+        existingContent = '# 全ノート目次\n\n';
+      }
+      const updated = existingContent.trimEnd() + '\n' + newLine;
+      await window.electronAPI.saveNote({ filename: mocPath, content: updated });
+    } catch (err) {
+      console.error('appendToMasterMocLocal failed:', err);
+    }
+  }
+
+  async function backgroundSync() {
+    if (!config.gitRemoteUrl) return;
+    await window.electronAPI.syncGit();
+  }
 
   async function generateAutoMoc(list: any[], force = false) {
     try {
@@ -946,6 +995,8 @@ export default function App() {
     }
     await loadNotesList();
     const savedName = result.name ?? name;
+    if (!privateMode) appendToMasterMocLocal(savedName).catch(console.error);
+    backgroundSync().catch(console.error);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
     setRibbonView('notes');
@@ -1014,7 +1065,12 @@ export default function App() {
     const formattedDate = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const initial = `# ${title}\n作成日時: ${formattedDate}\n\n`;
     // プライベート保管庫を開いている間に作成 → private/ 配下に暗号化保存
-    const filename = privateMode ? `private/${name}` : name;
+    // dirFilter が特定ディレクトリを指している場合はそこに保存
+    const filename = privateMode
+      ? `private/${name}`
+      : dirFilter !== '__all__'
+        ? `${dirFilter}/${name}`
+        : name;
     const result = await window.electronAPI.saveNote({ filename, content: initial });
     if (!result.success) {
       alert(result.error ?? 'ノートを作成できませんでした');
@@ -1024,6 +1080,8 @@ export default function App() {
     setNewNoteName('Untitled');
     await loadNotesList();
     const savedName = result.name ?? name;
+    if (!privateMode) appendToMasterMocLocal(savedName).catch(console.error);
+    backgroundSync().catch(console.error);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
 
@@ -1037,58 +1095,6 @@ export default function App() {
     let accumulatedText = `# ${title}\n作成日時: ${formattedDate}\n\n`;
     setContent(accumulatedText);
     setStreamedText('下書き作成中...');
-
-    // 新規ノート作成時のMOC動的コンテキスト抽出
-    const activeNotesForNew = notes.filter(
-      (n) =>
-        n.name !== 'moc/_All_Notes_MOC.md' &&
-        !n.name.startsWith('private/') &&
-        !n.name.startsWith('_')
-    );
-
-    // タイトルからキーワードを抽出
-    const keywordsForNew = title.toLowerCase().match(/[a-z0-9_]{2,}|[\u4e00-\u9faf]+|[\u30a0-\u30ff]{2,}/g) || [];
-
-    const scoredNotesForNew = activeNotesForNew.map((note) => {
-      let score = 0;
-      const nameLower = note.name.toLowerCase();
-      const tags = (note.tags || []).map(t => t.toLowerCase());
-
-      for (const word of keywordsForNew) {
-        if (nameLower.includes(word)) {
-          score += 10;
-        }
-        for (const tag of tags) {
-          if (tag.includes(word)) {
-            score += 5;
-          }
-        }
-      }
-      return { note, score };
-    });
-
-    let matchedNotesForNew = scoredNotesForNew
-      .filter(item => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(item => item.note);
-
-    if (matchedNotesForNew.length === 0) {
-      matchedNotesForNew = activeNotesForNew
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, 30);
-    } else {
-      matchedNotesForNew = matchedNotesForNew.slice(0, 50);
-    }
-
-    let newMocContent = '';
-    if (matchedNotesForNew.length > 0) {
-      newMocContent = "関連する可能性のある既存ノートの一覧:\n";
-      for (const note of matchedNotesForNew) {
-        const displayName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
-        const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
-        newMocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
-      }
-    }
 
     const client = new GeminiClient(config.geminiApiKey);
     await client.chatStream(
@@ -1128,7 +1134,6 @@ export default function App() {
       },
       {
         contextLimit: 12000,
-        mocContext: newMocContent
       }
     );
   }
@@ -1186,6 +1191,8 @@ export default function App() {
     const note: Note = { name: filename, path: result.path ?? filename, updatedAt: new Date().toISOString(), content: body };
     await openNote(note);
     setEditMode('edit');
+    appendToMasterMocLocal(filename);
+    backgroundSync().catch(console.error);
   }
 
   function renameNote(note: Note) {
@@ -1359,6 +1366,8 @@ export default function App() {
     }
     await loadNotesList();
     const savedName = result.name ?? name;
+    appendToMasterMocLocal(savedName).catch(console.error);
+    backgroundSync().catch(console.error);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
     setEditMode('edit');
@@ -1389,6 +1398,7 @@ export default function App() {
       setStreamedText('');
     }
     await loadNotesList();
+    backgroundSync().catch(console.error);
   }
 
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
@@ -1479,6 +1489,8 @@ export default function App() {
         const result = await window.electronAPI.saveNote({ filename, content: fullContent });
         if (result.success) {
           const savedName = result.name ?? filename;
+          appendToMasterMocLocal(savedName).catch(console.error);
+          backgroundSync().catch(console.error);
           const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
           setSelectedNote(note);
           setContent(fullContent);
@@ -1567,7 +1579,7 @@ export default function App() {
     );
   }
 
-  async function sendChat(overridePrompt?: string) {
+  async function sendChat(overridePrompt?: string, forceMocRef = false) {
     const prompt = (overridePrompt ?? chatInput).trim();
     if (!prompt || isGenerating) return;
     const client = new GeminiClient(config.geminiApiKey);
@@ -1578,68 +1590,39 @@ export default function App() {
     setStreamedText('');
     setIsGenerating(true);
 
-    // 対策3: ユーザーの質問に関連するノートだけを動的に絞り込んで送信する
-    const activeNotes = notes.filter(
-      (n) =>
-        n.name !== 'moc/_All_Notes_MOC.md' &&
-        !n.name.startsWith('private/') &&
-        !n.name.startsWith('_')
-    );
-
-    // 質問文から「英数字（2文字以上）」「漢字（1文字以上）」「カタカナ（2文字以上）」を抽出（ひらがな/助詞を除外してノイズ削減）
-    const words = prompt
-      .toLowerCase()
-      .match(/[a-z0-9_]{2,}|[\u4e00-\u9faf]+|[\u30a0-\u30ff]{2,}/g) || [];
-
-    const scoredNotes = activeNotes.map((note) => {
-      let score = 0;
-      const nameLower = note.name.toLowerCase();
-      const tags = (note.tags || []).map(t => t.toLowerCase());
-
-      for (const word of words) {
-        if (nameLower.includes(word)) {
-          score += 10; // タイトルに単語が含まれていれば高配点
-        }
-        for (const tag of tags) {
-          if (tag.includes(word)) {
-            score += 5; // タグに含まれていれば中配点
-          }
-        }
-      }
-      return { note, score };
-    });
-
-    let matchedNotes = scoredNotes
-      .filter(item => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(item => item.note);
-
-    const isFiltered = matchedNotes.length > 0;
-
-    if (!isFiltered) {
-      // 関連ノートがキーワードで見つからない場合は、直近更新されたノート30件をフォールバック
-      matchedNotes = activeNotes
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, 30);
-    } else {
-      matchedNotes = matchedNotes.slice(0, 50); // 最大50件に制限
-    }
-
-    // デバッグログ：実際にAIに送られているノートのリストをコンソールに出力
-    console.log("=== MOC 送信データ検証 ===");
-    console.log("入力プロンプト:", prompt);
-    console.log("抽出キーワード:", words);
-    console.log("関連マッチしたか:", isFiltered ? "はい" : "いいえ (直近30件をフォールバック送信)");
-    console.log("送信されたノート一覧:", matchedNotes.map(n => n.name));
-    console.log("==========================");
-
+    // moc-ref モード選択時のみノート一覧をMOCとして送信する
     let mocContent = '';
-    if (matchedNotes.length > 0) {
-      mocContent = "関連する可能性のある既存ノートの一覧:\n";
-      for (const note of matchedNotes) {
-        const displayName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
-        const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
-        mocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
+    if (forceMocRef) {
+      const activeNotes = notes.filter(
+        (n) =>
+          n.name !== 'moc/_All_Notes_MOC.md' &&
+          !n.name.startsWith('private/') &&
+          !n.name.startsWith('_')
+      );
+      const words = prompt.toLowerCase().match(/[a-z0-9_]{2,}|[一-龯]+|[゠-ヿ]{2,}/g) || [];
+      const scoredNotes = activeNotes.map((note) => {
+        let score = 0;
+        const nameLower = note.name.toLowerCase();
+        const tags = (note.tags || []).map(t => t.toLowerCase());
+        for (const word of words) {
+          if (nameLower.includes(word)) score += 10;
+          for (const tag of tags) { if (tag.includes(word)) score += 5; }
+        }
+        return { note, score };
+      });
+      let matchedNotes = scoredNotes.filter(i => i.score > 0).sort((a, b) => b.score - a.score).map(i => i.note);
+      if (matchedNotes.length === 0) {
+        matchedNotes = activeNotes.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 30);
+      } else {
+        matchedNotes = matchedNotes.slice(0, 50);
+      }
+      if (matchedNotes.length > 0) {
+        mocContent = "関連する可能性のある既存ノートの一覧:\n";
+        for (const note of matchedNotes) {
+          const displayName = note.name.replace(/^.*\//, '').replace(/\.md$/i, '');
+          const tagsText = note.tags && note.tags.length > 0 ? ` (タグ: ${note.tags.join(', ')})` : '';
+          mocContent += `- [[${note.name.replace(/\.md$/i, '')}|${displayName}]]${tagsText}\n`;
+        }
       }
     }
 
@@ -1672,7 +1655,8 @@ export default function App() {
       if (!loaded.geminiApiKey) setRibbonView('settings');
     });
     window.electronAPI.readMasterTags().then((tags) => setMasterTags(tags));
-    // 起動時 git pull → 完了後にノートリスト読み込み
+    // 起動時 git pull → 完了後にノートリスト読み込み＆保管庫確認
+    // vaultStatus は pull 完了後に実行（モバイルの _vault.json を取得してから判定するため）
     window.electronAPI.startupGitPull().then((res) => {
       if (!res.success && !res.skipped) setStartupPullError(res.error ?? null);
       setStartupPulling(false);
@@ -1680,23 +1664,26 @@ export default function App() {
       window.electronAPI.checkMigration().then(({ done }) => {
         if (!done) setShowMigrationDialog(true);
       });
+      window.electronAPI.vaultStatus().then((s) => {
+        setVaultExists(s.exists);
+        setVaultUnlocked(s.unlocked);
+      });
     });
     const unsubscribe = window.electronAPI.onGitStatusChanged((status, error) => {
       setGitStatus(status);
       setGitError(error ?? null);
     });
-    // 保管庫の状態取得＋自動ロック通知の購読
-    window.electronAPI.vaultStatus().then((s) => {
-      setVaultExists(s.exists);
-      setVaultUnlocked(s.unlocked);
-    });
     const unsubVault = window.electronAPI.onVaultLocked(() => {
       setVaultUnlocked(false);
       setPrivateMode(false);
     });
-    // 定期git pullでモバイル変更（削除含む）を自動反映
+    // 定期git pullでモバイル変更（削除含む）を自動反映＋保管庫状態を再確認
     const unsubNotes = window.electronAPI.onNotesChanged(() => {
       loadNotesList();
+      window.electronAPI.vaultStatus().then((s) => {
+        setVaultExists(s.exists);
+        setVaultUnlocked(s.unlocked);
+      });
     });
     return () => { unsubscribe(); unsubVault(); unsubNotes(); };
   }, []);
@@ -2124,6 +2111,42 @@ export default function App() {
             </div>
           ) : (
             <>
+              {/* ディレクトリ切替コンボボックス */}
+              <div className="shrink-0 border-b border-white/10 p-2 space-y-1.5">
+                <select
+                  value={dirFilter}
+                  onChange={(e) => saveDirFilter(e.target.value)}
+                  className="w-full rounded border border-white/10 bg-[#0f172a] px-2 py-1.5 text-xs text-gray-200 outline-none"
+                >
+                  <option value="__all__">すべて</option>
+                  {allDirs.map((dir) => (
+                    <option key={dir} value={dir}>
+                      {dir.replace(/^notes\//, '')}
+                    </option>
+                  ))}
+                  {dirFilter !== '__all__' && !allDirs.includes(dirFilter) && (
+                    <option value={dirFilter}>{dirFilter.replace(/^notes\//, '')}</option>
+                  )}
+                </select>
+                <button
+                  title="Windowsエクスプローラーでディレクトリを選択して絞り込む"
+                  className="flex w-full items-center justify-center gap-1.5 rounded border border-white/10 bg-white/5 px-2 py-1.5 text-xs text-gray-300 hover:bg-white/10 transition-colors"
+                  onClick={async () => {
+                    const selected = await window.electronAPI.openDirectoryDialog();
+                    if (!selected) return;
+                    const config = await window.electronAPI.loadConfig();
+                    const selectedNorm = selected.replace(/\\/g, '/').replace(/\/$/, '');
+                    const notesPathNorm = config.notesPath.replace(/\\/g, '/').replace(/\/$/, '');
+                    const rel = selectedNorm.toLowerCase().startsWith(notesPathNorm.toLowerCase() + '/')
+                      ? selectedNorm.slice(notesPathNorm.length + 1)
+                      : null;
+                    if (!rel) { alert('ノートフォルダ外のディレクトリは選択できません'); return; }
+                    saveDirFilter(rel);
+                  }}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" /> ディレクトリを開く
+                </button>
+              </div>
               <div className="space-y-2 p-3">
                   <button
                     className="flex w-full items-center justify-center gap-2 rounded bg-indigo-600 px-3 py-2 font-semibold hover:bg-indigo-500 transition-colors text-sm"
@@ -2594,6 +2617,15 @@ export default function App() {
                   >
                     <ListTree className="h-3.5 w-3.5 text-indigo-400" />
                     要約
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isGenerating}
+                    onClick={() => sendChat('このノートに関連する既存ノートを参照して、知識の繋がりや関連情報をまとめてください', true)}
+                    className="flex items-center gap-1.5 rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs text-violet-400 hover:bg-violet-500/20 disabled:opacity-40 transition-colors"
+                  >
+                    <Network className="h-3.5 w-3.5" />
+                    MOC参照
                   </button>
                 </div>
               )}
@@ -3153,6 +3185,7 @@ export default function App() {
 
               setShowRenameModal(false);
               setRenameNoteTarget(null);
+              backgroundSync().catch(console.error);
             }}
           >
             <div className="mb-4 flex items-center justify-between">

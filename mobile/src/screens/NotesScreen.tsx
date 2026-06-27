@@ -23,6 +23,8 @@ export default function FilesScreen({
   onArchive,
   onShare,
   onToggleFavorite,
+  folderFilter,
+  onFolderFilterChange,
   privateMode,
   onVaultClick,
   onSecretUnlock,
@@ -41,6 +43,8 @@ export default function FilesScreen({
   onShare: (note: Note) => void;
   onToggleFavorite: (note: Note) => void;
   onCreateMoc: (title: string, useAi?: boolean) => void;
+  folderFilter: string | null;
+  onFolderFilterChange: (v: string | null) => void;
   privateMode: boolean;
   onVaultClick: () => void;
   onSecretUnlock: (query: string) => Promise<boolean>;
@@ -76,13 +80,32 @@ export default function FilesScreen({
     closeModal();
   };
 
+  // ノートタブ用フォルダ一覧（remotePath の第1階層を抽出）
+  const folders = useMemo(() => {
+    const set = new Set<string>();
+    notes.forEach((n) => {
+      const p = n.remotePath ?? n.name;
+      if (p.startsWith('moc/') || p.startsWith('private/')) return;
+      const parts = p.split('/');
+      if (parts.length >= 2) set.add(parts.slice(0, -1).join('/'));
+    });
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [notes]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = notes.filter((n) => {
       const isMoc = (n.remotePath ?? n.name).startsWith('moc/');
       if (view === 'moc') return isMoc;
       if (showArchived) return archived.includes(n.name);
-      return !archived.includes(n.name) && !isMoc;
+      if (!archived.includes(n.name) && !isMoc) {
+        if (folderFilter) {
+          const p = n.remotePath ?? n.name;
+          return p.startsWith(folderFilter + '/');
+        }
+        return true;
+      }
+      return false;
     });
     if (q) {
       list = list.filter(
@@ -98,7 +121,7 @@ export default function FilesScreen({
       if (sortBy === 'date-asc') return a.updatedAt.localeCompare(b.updatedAt);
       return b.updatedAt.localeCompare(a.updatedAt);
     });
-  }, [notes, query, archived, favorites, showArchived, view, sortBy]);
+  }, [notes, query, archived, favorites, showArchived, view, sortBy, folderFilter]);
 
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
@@ -173,6 +196,26 @@ export default function FilesScreen({
             {showArchived ? 'アーカイブ中' : 'アーカイブ'}
           </button>
         </div>
+        {/* フォルダ絞り込みコンボボックス（ノートタブ時のみ表示） */}
+        {view === 'all' && !showArchived && (
+          <select
+            value={folderFilter ?? ''}
+            onChange={(e) => onFolderFilterChange(e.target.value || null)}
+            className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-gray-200 outline-none"
+          >
+            <option value="">すべて</option>
+            {folderFilter && !folders.includes(folderFilter) && (
+              <option key={folderFilter} value={folderFilter}>
+                {folderFilter.replace(/^notes\//, '')}
+              </option>
+            )}
+            {folders.map((f) => (
+              <option key={f} value={f}>
+                {f.replace(/^notes\//, '')}
+              </option>
+            ))}
+          </select>
+        )}
         {/* 並べ替え + ファイル数 */}
         <div className="flex items-center justify-between text-xs text-gray-500">
           <span>{filtered.length}<span className="text-gray-600">/{notes.filter(n => !(n.remotePath ?? n.name).startsWith('moc/')).length}件</span></span>
@@ -307,6 +350,7 @@ export default function FilesScreen({
           onChange={setInputValue}
           onSubmit={handleSubmit}
           onClose={closeModal}
+          showFormatButtons
         />
       )}
       {modal === 'ai' && (
@@ -318,6 +362,7 @@ export default function FilesScreen({
           onChange={setInputValue}
           onSubmit={handleSubmit}
           onClose={closeModal}
+          showFormatButtons
         >
           <div className="mb-3">
             <p className="mb-1.5 text-xs text-gray-500">プロンプト</p>
@@ -348,6 +393,7 @@ export default function FilesScreen({
           onChange={setInputValue}
           onSubmit={handleSubmit}
           onClose={closeModal}
+          showFormatButtons
         />
       )}
       {modal === 'moc' && (

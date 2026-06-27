@@ -38,6 +38,8 @@ interface Window {
     renameNote: (data: { oldFilename: string; newFilename: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
     syncGit: () => Promise<{ success: boolean; error?: string }>;
     openDirectoryDialog: () => Promise<string | null>;
+    openMdFileDialog: () => Promise<Array<{ absolutePath: string; relativePath: string }> | null>;
+    saveMdFileDialog: (defaultDir?: string) => Promise<{ absolutePath: string; relativePath: string } | null>;
     deleteNote: (filename: string) => Promise<{ success: boolean; error?: string }>;
     onGitStatusChanged: (callback: (status: 'idle' | 'syncing' | 'success' | 'error', error?: string) => void) => () => void;
     windowMoving: (delta: { deltaX: number; deltaY: number }) => void;

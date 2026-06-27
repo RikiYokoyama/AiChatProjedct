@@ -299,22 +299,32 @@ export class GitHubSync {
 
   private async updateRemoteIndex(state: SyncState): Promise<void> {
     try {
-      // 現在のリモートファイル一覧を再取得してインデックスを生成
       const remoteList = await this.fetchRemoteList();
+      // 既存の _index.json から updatedAt を保持するためのマップ
+      const existingUpdatedAt = new Map<string, string>();
+      let existingSha: string | undefined;
+      try {
+        const existingFile = await this.fetchRemoteFile('_index.json');
+        existingSha = existingFile.sha;
+        const existingIndex = JSON.parse(existingFile.content) as Array<{ name: string; updatedAt?: string }>;
+        for (const e of existingIndex) {
+          if (e.updatedAt) existingUpdatedAt.set(e.name, e.updatedAt);
+        }
+      } catch { /* _index.json がなければ無視 */ }
+
       const index = remoteList
         .filter(f => !f.name.startsWith('_'))
         .map(f => ({
           name: f.name,
           path: f.path,
           sha: f.sha,
-          updatedAt: new Date().toISOString(),
+          updatedAt: existingUpdatedAt.get(f.name) ?? new Date().toISOString(),
           remotePath: state.remotePaths[f.name] ?? f.path,
           isMoc: f.path.startsWith('moc/'),
         }));
       const content = JSON.stringify(index, null, 2);
       try {
-        const existing = await this.fetchRemoteFile('_index.json');
-        await this.putFile('_index.json', content, existing.sha);
+        await this.putFile('_index.json', content, existingSha);
       } catch {
         await this.putFile('_index.json', content);
       }
@@ -550,20 +560,31 @@ export async function addEntryToIndex(
 export async function appendToMasterMoc(
   gitRemoteUrl: string,
   noteName: string,  // ファイル名 例: "骨伝導イヤホン.md"
+  remotePath?: string, // フルパス 例: "notes/2026-06/骨伝導イヤホン.md"
 ): Promise<void> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return;
   const sync = new GitHubSync(token, repo, branch);
-  const mocPath = 'moc/moc.md';
+  const mocPath = 'moc/_All_Notes_MOC.md';
   const displayName = noteName.replace(/\.md$/i, '');
+  const linkPath = remotePath ? remotePath.replace(/\.md$/i, '') : displayName;
   const dateStr = new Date().toISOString().slice(0, 10);
-  const newLine = `- [[${displayName}]] — ${dateStr} 追加\n`;
+  const newLine = `- [[${linkPath}|${displayName}]] — ${dateStr} 追加\n`;
   try {
-    const file = await sync.fetchRemoteFile(mocPath);
-    const updated = file.content.trimEnd() + '\n' + newLine;
-    await sync.putFile(mocPath, updated, file.sha);
-  } catch {
-    /* moc/moc.md が存在しない場合は作成しない（ユーザーが手動作成を前提） */
+    let existingSha: string | undefined;
+    let existingContent = '';
+    try {
+      const file = await sync.fetchRemoteFile(mocPath);
+      existingSha = file.sha;
+      existingContent = file.content;
+    } catch {
+      // ファイルが存在しない場合は新規作成
+      existingContent = '# 全ノート目次\n\n';
+    }
+    const updated = existingContent.trimEnd() + '\n' + newLine;
+    await sync.putFile(mocPath, updated, existingSha);
+  } catch (err) {
+    console.error('appendToMasterMoc failed:', err);
   }
 }
 

@@ -97,7 +97,11 @@ export function isEmptyNote(content: string): boolean {
 // [[link]] → markdownリンクへ変換（プレビュー用）
 export function preprocessWikiLinks(text: string) {
   if (!text) return '';
-  let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '[$2](#wiki-$1)');
-  processed = processed.replace(/\[\[([^\]]+)\]\]/g, '[$1](#wiki-$1)');
+  let processed = text.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, (_, name, display) =>
+    `[${display}](#wiki-${encodeURIComponent(name.trim())})`
+  );
+  processed = processed.replace(/\[\[([^\]]+)\]\]/g, (_, name) =>
+    `[${name}](#wiki-${encodeURIComponent(name.trim())})`
+  );
   return processed;
 }
