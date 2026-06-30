@@ -276,7 +276,7 @@ export default function NoteScreen({
     : notes;
 
   return (
-    <div className="flex h-full flex-col bg-[#070a13]" style={{ paddingBottom: keyboardInset }}>
+    <div className="flex h-full flex-col bg-[#070a13]" style={{ paddingBottom: keyboardInset }} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
 
       {/* ── トップバー ── */}
       <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2">
@@ -327,11 +327,7 @@ export default function NoteScreen({
       </div>
 
       {/* ── ノート本文エリア ── */}
-      <div
-        className="min-h-0 flex-1"
-        onTouchStart={onTouchStart}
-        onTouchEnd={onTouchEnd}
-      >
+      <div className="min-h-0 flex-1">
         {selectedNote ? (
           content === '' ? (
             <div className="flex h-full items-center justify-center">
