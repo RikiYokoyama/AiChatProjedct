@@ -194,7 +194,24 @@ export default function NoteScreen({
     onSend(selectedNote.displayName ?? noteTitle(selectedNote.name));
   }
 
-  // スワイプ操作: 右スワイプ→前のノート、左スワイプ→次のノート
+  // 閲覧履歴ベースのスワイプナビゲーション
+  const historyStack = useRef<string[]>([]);
+  const historyIndex = useRef<number>(-1);
+  const isNavigating = useRef(false);
+
+  // ノートが切り替わったとき、スワイプ操作以外なら履歴に追加
+  const prevNoteName = useRef<string | null>(null);
+  if (selectedNote && selectedNote.name !== prevNoteName.current) {
+    if (!isNavigating.current) {
+      // 現在位置より先の履歴を切り捨てて新しいノートを追加
+      historyStack.current = historyStack.current.slice(0, historyIndex.current + 1);
+      historyStack.current.push(selectedNote.name);
+      historyIndex.current = historyStack.current.length - 1;
+    }
+    prevNoteName.current = selectedNote.name;
+    isNavigating.current = false;
+  }
+
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
   const onTouchStart = (e: React.TouchEvent) => {
@@ -206,15 +223,26 @@ export default function NoteScreen({
     const dy = e.changedTouches[0].clientY - touchStartY.current;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
       if (!selectedNote) return;
-      const idx = notes.findIndex((n) => n.name === selectedNote.name);
       if (dx > 0) {
-        // 右スワイプ → 前のノート
-        const prev = notes[idx - 1];
-        if (prev) onSelectNote(prev);
+        // 右スワイプ → 履歴を戻る
+        const prevIdx = historyIndex.current - 1;
+        if (prevIdx < 0) return;
+        const prevName = historyStack.current[prevIdx];
+        const prevNote = notes.find((n) => n.name === prevName);
+        if (!prevNote) return;
+        isNavigating.current = true;
+        historyIndex.current = prevIdx;
+        onSelectNote(prevNote);
       } else {
-        // 左スワイプ → 次のノート
-        const next = notes[idx + 1];
-        if (next) onSelectNote(next);
+        // 左スワイプ → 履歴を進む
+        const nextIdx = historyIndex.current + 1;
+        if (nextIdx >= historyStack.current.length) return;
+        const nextName = historyStack.current[nextIdx];
+        const nextNote = notes.find((n) => n.name === nextName);
+        if (!nextNote) return;
+        isNavigating.current = true;
+        historyIndex.current = nextIdx;
+        onSelectNote(nextNote);
       }
     }
   };
