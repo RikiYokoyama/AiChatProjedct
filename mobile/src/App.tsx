@@ -6,6 +6,7 @@ import GraphScreen from './screens/GraphScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import {
   AppConfig,
+  CustomPrompt,
   emptyConfig,
   loadConfig,
   saveConfig,
@@ -176,16 +177,8 @@ export default function App() {
           }
         }).catch(() => {});
 
-        // カスタムプロンプトを GitHub からも取得（PC版と共有）
-        readCustomPromptsFromGitHub(cfg.gitRemoteUrl).then((remotePrompts) => {
-          if (remotePrompts.length > 0) {
-            setConfig((prev) => {
-              const next = { ...prev, customPrompts: remotePrompts as AppConfig['customPrompts'] };
-              saveConfig(next);
-              return next;
-            });
-          }
-        }).catch(() => {});
+        // カスタムプロンプトを GitHub からも取得（PC版と共有、ローカルとマージ）
+        mergeCustomPromptsFromGitHub(cfg.gitRemoteUrl);
 
         // 保管庫の有無を確認
         vaultExistsOnGitHub(cfg.gitRemoteUrl).then(setVaultExists).catch(() => {});
@@ -226,19 +219,37 @@ export default function App() {
     });
   }, []);
 
+  // ローカルとGitHub（共有）のカスタムプロンプトをID重複除去でマージ（片方だけの上書きを防ぐ）
+  function mergeCustomPromptsList(local: CustomPrompt[], remote: CustomPrompt[]): CustomPrompt[] {
+    const merged = [...local];
+    const localIds = new Set(local.map((p) => p.id));
+    for (const r of remote) {
+      if (!localIds.has(r.id)) merged.push(r);
+    }
+    return merged;
+  }
+
+  // GitHubから読み込み、ローカルとマージして反映（差分があればGitHubにも書き戻して同期）
+  const mergeCustomPromptsFromGitHub = useCallback(async (gitRemoteUrl: string) => {
+    const remotePrompts = await readCustomPromptsFromGitHub(gitRemoteUrl).catch(() => []);
+    if (remotePrompts.length === 0) return;
+    setConfig((prev) => {
+      const merged = mergeCustomPromptsList(prev.customPrompts ?? [], remotePrompts as CustomPrompt[]);
+      if (merged.length !== remotePrompts.length) {
+        // ローカルにしかないプロンプトがあった → GitHubにも書き戻す
+        writeCustomPromptsToGitHub(gitRemoteUrl, merged).catch(() => {});
+      }
+      const next = { ...prev, customPrompts: merged };
+      saveConfig(next);
+      return next;
+    });
+  }, []);
+
   const refreshNotes = useCallback(async () => {
     const cfg = configRef.current;
     if (cfg.gitRemoteUrl) {
       // カスタムプロンプト（PC版と共有）も合わせて再取得
-      readCustomPromptsFromGitHub(cfg.gitRemoteUrl).then((remotePrompts) => {
-        if (remotePrompts.length > 0) {
-          setConfig((prev) => {
-            const next = { ...prev, customPrompts: remotePrompts as AppConfig['customPrompts'] };
-            saveConfig(next);
-            return next;
-          });
-        }
-      }).catch(() => {});
+      mergeCustomPromptsFromGitHub(cfg.gitRemoteUrl);
 
       try {
         const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
@@ -247,7 +258,7 @@ export default function App() {
       } catch { /* fall through to local */ }
     }
     setNotes(await listNotes());
-  }, [mergeRemoteNotes]);
+  }, [mergeRemoteNotes, mergeCustomPromptsFromGitHub]);
 
   // ---------- アプリ復帰時自動更新（Phase 8） ----------
   useEffect(() => {
