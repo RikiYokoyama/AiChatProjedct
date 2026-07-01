@@ -226,7 +226,7 @@ export default function NoteScreen({
       if (dx > 0) {
         // 右スワイプ → 履歴を戻る
         const prevIdx = historyIndex.current - 1;
-        if (prevIdx < 0) return;
+        if (prevIdx < 0) { onBack(); return; }
         const prevName = historyStack.current[prevIdx];
         const prevNote = notes.find((n) => n.name === prevName);
         if (!prevNote) return;
