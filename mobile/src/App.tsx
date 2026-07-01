@@ -44,6 +44,8 @@ import {
   syncNotes,
   readMasterTagsFromGitHub,
   writeMasterTagsToGitHub,
+  readCustomPromptsFromGitHub,
+  writeCustomPromptsToGitHub,
   fetchNoteListFromGitHub,
   fetchNoteContentFromGitHub,
   saveNoteToGitHub,
@@ -171,6 +173,17 @@ export default function App() {
             const merged = Array.from(new Set([...cachedTags, ...remoteTags]));
             setMasterTags(merged);
             saveMasterTagsLocal(merged);
+          }
+        }).catch(() => {});
+
+        // カスタムプロンプトを GitHub からも取得（PC版と共有）
+        readCustomPromptsFromGitHub(cfg.gitRemoteUrl).then((remotePrompts) => {
+          if (remotePrompts.length > 0) {
+            setConfig((prev) => {
+              const next = { ...prev, customPrompts: remotePrompts as AppConfig['customPrompts'] };
+              saveConfig(next);
+              return next;
+            });
           }
         }).catch(() => {});
 
@@ -1099,6 +1112,7 @@ export default function App() {
     };
     setConfig(next);
     await saveConfig(next);
+    if (config.gitRemoteUrl) writeCustomPromptsToGitHub(config.gitRemoteUrl, next.customPrompts).catch(() => {});
     setPendingPrompt(null);
   }
 
@@ -1240,6 +1254,7 @@ export default function App() {
   async function handleSaveConfig(next: AppConfig) {
     setConfig(next);
     await saveConfig(next);
+    if (next.gitRemoteUrl) writeCustomPromptsToGitHub(next.gitRemoteUrl, next.customPrompts).catch(() => {});
     alert('設定を保存しました');
   }
 
@@ -1247,6 +1262,7 @@ export default function App() {
     const next = { ...config, customPrompts: (config.customPrompts ?? []).filter((p) => p.id !== id) };
     setConfig(next);
     await saveConfig(next);
+    if (config.gitRemoteUrl) writeCustomPromptsToGitHub(config.gitRemoteUrl, next.customPrompts).catch(() => {});
     if (chatMode === id) setChatMode('deep-think');
   }
 
@@ -1257,6 +1273,7 @@ export default function App() {
     };
     setConfig(next);
     await saveConfig(next);
+    if (config.gitRemoteUrl) writeCustomPromptsToGitHub(config.gitRemoteUrl, next.customPrompts).catch(() => {});
   }
 
   // ---------- 画面レンダリング ----------

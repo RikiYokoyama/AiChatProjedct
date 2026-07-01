@@ -177,6 +177,25 @@ export class GitHubSync {
     }
   }
 
+  async readCustomPrompts(): Promise<unknown[]> {
+    try {
+      const file = await this.fetchRemoteFile('_custom_prompts.json');
+      const data = JSON.parse(file.content);
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async writeCustomPrompts(prompts: unknown[]): Promise<void> {
+    try {
+      const file = await this.fetchRemoteFile('_custom_prompts.json');
+      await this.putFile('_custom_prompts.json', JSON.stringify(prompts, null, 2), file.sha);
+    } catch {
+      await this.putFile('_custom_prompts.json', JSON.stringify(prompts, null, 2));
+    }
+  }
+
   // 新規ファイルのパスを生成する（notes/ フォルダへ）
   private generateArchivePath(name: string): string {
     return `notes/${name}`;
@@ -356,6 +375,18 @@ export async function writeMasterTagsToGitHub(gitRemoteUrl: string, tags: string
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return;
   return new GitHubSync(token, repo, branch).writeMasterTags(tags);
+}
+
+export async function readCustomPromptsFromGitHub(gitRemoteUrl: string): Promise<unknown[]> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return [];
+  return new GitHubSync(token, repo, branch).readCustomPrompts();
+}
+
+export async function writeCustomPromptsToGitHub(gitRemoteUrl: string, prompts: unknown[]): Promise<void> {
+  const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
+  if (!token || !repo) return;
+  return new GitHubSync(token, repo, branch).writeCustomPrompts(prompts);
 }
 
 // ---------- GitHub 直接アクセス（Phase 5: モバイル thin client） ----------
