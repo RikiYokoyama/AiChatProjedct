@@ -321,13 +321,11 @@ app.on('before-quit', (event) => {
       return;
     }
 
-    if (!hasPendingCommit) { app.quit(); return; }
-
-    // renderer にファイル一覧を送ってカスタムダイアログを表示
+    // 未プッシュの有無に関わらず常にダイアログを表示
     const added    = statusFiles.filter(f => f.index === 'A' || f.working_dir === '?').map(f => f.path);
     const modified = statusFiles.filter(f => f.index === 'M' || f.working_dir === 'M').map(f => f.path);
     const deleted  = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => f.path);
-    mainWindow.webContents.send('quit-confirm', { added, modified, deleted });
+    mainWindow.webContents.send('quit-confirm', { added, modified, deleted, hasPending: hasPendingCommit });
 
     // renderer からの応答を待つ
     ipcMain.once('quit-response', async (_, response) => {

@@ -291,7 +291,7 @@ export default function App() {
 
   // 終了確認ダイアログ
   type QuitStep = { label: string; state?: 'running' | 'done' | 'error'; error?: string };
-  const [quitDialog, setQuitDialog] = useState<{ added: string[]; modified: string[]; deleted: string[] } | null>(null);
+  const [quitDialog, setQuitDialog] = useState<{ added: string[]; modified: string[]; deleted: string[]; hasPending: boolean } | null>(null);
   const [quitSteps, setQuitSteps] = useState<QuitStep[]>([]);
 
   const allFolders = useMemo(() => {
@@ -3224,34 +3224,48 @@ export default function App() {
       {quitDialog && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
           <div className="w-[480px] rounded-xl border border-white/10 bg-[#0d1225] shadow-2xl">
+
             <div className="border-b border-white/10 px-5 py-4">
-              <h2 className="text-base font-bold text-white">GitHubにプッシュしますか？</h2>
-              <p className="mt-0.5 text-xs text-gray-400">未プッシュの変更があります</p>
+              {quitDialog.hasPending ? (
+                <>
+                  <h2 className="text-base font-bold text-white">GitHubにプッシュしますか？</h2>
+                  <p className="mt-0.5 text-xs text-amber-400">未プッシュの変更があります</p>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-base font-bold text-white">終了の確認</h2>
+                  <p className="mt-0.5 flex items-center gap-1.5 text-xs text-emerald-400">
+                    <Check className="h-3 w-3" /> すべての変更はGitHubに同期済みです
+                  </p>
+                </>
+              )}
             </div>
 
-            <div className="max-h-56 overflow-y-auto px-5 py-3 text-xs">
-              {quitDialog.added.length > 0 && (
-                <div className="mb-2">
-                  <span className="font-semibold text-emerald-400">新規 ({quitDialog.added.length}件)</span>
-                  {quitDialog.added.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
-                </div>
-              )}
-              {quitDialog.modified.length > 0 && (
-                <div className="mb-2">
-                  <span className="font-semibold text-amber-400">編集済み ({quitDialog.modified.length}件)</span>
-                  {quitDialog.modified.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
-                </div>
-              )}
-              {quitDialog.deleted.length > 0 && (
-                <div className="mb-2">
-                  <span className="font-semibold text-red-400">削除 ({quitDialog.deleted.length}件)</span>
-                  {quitDialog.deleted.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
-                </div>
-              )}
-              {quitDialog.added.length === 0 && quitDialog.modified.length === 0 && quitDialog.deleted.length === 0 && (
-                <p className="text-gray-400">未プッシュのコミットがあります</p>
-              )}
-            </div>
+            {quitDialog.hasPending && (
+              <div className="max-h-56 overflow-y-auto px-5 py-3 text-xs">
+                {quitDialog.added.length > 0 && (
+                  <div className="mb-2">
+                    <span className="font-semibold text-emerald-400">新規 ({quitDialog.added.length}件)</span>
+                    {quitDialog.added.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
+                  </div>
+                )}
+                {quitDialog.modified.length > 0 && (
+                  <div className="mb-2">
+                    <span className="font-semibold text-amber-400">編集済み ({quitDialog.modified.length}件)</span>
+                    {quitDialog.modified.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
+                  </div>
+                )}
+                {quitDialog.deleted.length > 0 && (
+                  <div className="mb-2">
+                    <span className="font-semibold text-red-400">削除 ({quitDialog.deleted.length}件)</span>
+                    {quitDialog.deleted.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
+                  </div>
+                )}
+                {quitDialog.added.length === 0 && quitDialog.modified.length === 0 && quitDialog.deleted.length === 0 && (
+                  <p className="text-gray-400">未プッシュのコミットがあります</p>
+                )}
+              </div>
+            )}
 
             {quitSteps.length > 0 && (
               <div className="border-t border-white/10 px-5 py-3">
@@ -3265,26 +3279,28 @@ export default function App() {
                     <span className={step.state === 'running' ? 'text-indigo-300' : step.state === 'done' ? 'text-emerald-300' : step.state === 'error' ? 'text-red-300' : 'text-gray-500'}>
                       {'> '}{step.label}
                     </span>
-                    {step.error && <span className="text-red-400">{step.error}</span>}
+                    {step.error && <span className="ml-2 text-red-400">{step.error}</span>}
                   </div>
                 ))}
               </div>
             )}
 
             <div className="flex gap-2 border-t border-white/10 px-5 py-4">
-              <button
-                onClick={() => { window.electronAPI.sendQuitResponse('push'); }}
-                disabled={quitSteps.length > 0}
-                className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
-              >
-                プッシュして終了
-              </button>
+              {quitDialog.hasPending && (
+                <button
+                  onClick={() => { window.electronAPI.sendQuitResponse('push'); }}
+                  disabled={quitSteps.length > 0}
+                  className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  プッシュして終了
+                </button>
+              )}
               <button
                 onClick={() => { window.electronAPI.sendQuitResponse('quit'); }}
                 disabled={quitSteps.length > 0}
                 className="flex-1 rounded-lg bg-white/10 py-2 text-sm font-semibold text-gray-300 hover:bg-white/20 disabled:opacity-50"
               >
-                そのまま終了
+                {quitDialog.hasPending ? 'そのまま終了' : '終了'}
               </button>
               <button
                 onClick={() => { window.electronAPI.sendQuitResponse('cancel'); setQuitDialog(null); }}

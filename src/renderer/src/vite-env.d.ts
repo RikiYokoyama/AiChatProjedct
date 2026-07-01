@@ -65,7 +65,7 @@ interface Window {
     vaultLock: () => Promise<{ success: boolean }>;
     onVaultLocked: (callback: () => void) => () => void;
     onNotesChanged: (callback: () => void) => () => void;
-    onQuitConfirm: (callback: (data: { added: string[]; modified: string[]; deleted: string[] }) => void) => () => void;
+    onQuitConfirm: (callback: (data: { added: string[]; modified: string[]; deleted: string[]; hasPending: boolean }) => void) => () => void;
     onQuitProgress: (callback: (steps: { label: string; state?: 'running' | 'done' | 'error'; error?: string }[]) => void) => () => void;
     sendQuitResponse: (response: 'push' | 'quit' | 'cancel') => void;
   };
