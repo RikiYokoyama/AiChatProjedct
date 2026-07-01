@@ -289,6 +289,11 @@ export default function App() {
   const [mocFilterValue, setMocFilterValue] = useState('');
   const [mocUpdateSuccess, setMocUpdateSuccess] = useState(false);
 
+  // 終了確認ダイアログ
+  type QuitStep = { label: string; state?: 'running' | 'done' | 'error'; error?: string };
+  const [quitDialog, setQuitDialog] = useState<{ added: string[]; modified: string[]; deleted: string[] } | null>(null);
+  const [quitSteps, setQuitSteps] = useState<QuitStep[]>([]);
+
   const allFolders = useMemo(() => {
     const set = new Set<string>();
     notes.forEach((n) => {
@@ -1685,7 +1690,14 @@ export default function App() {
         setVaultUnlocked(s.unlocked);
       });
     });
-    return () => { unsubscribe(); unsubVault(); unsubNotes(); };
+    const unsubQuit = window.electronAPI.onQuitConfirm((data) => {
+      setQuitSteps([]);
+      setQuitDialog(data);
+    });
+    const unsubQuitProgress = window.electronAPI.onQuitProgress((steps) => {
+      setQuitSteps(steps);
+    });
+    return () => { unsubscribe(); unsubVault(); unsubNotes(); unsubQuit(); unsubQuitProgress(); };
   }, []);
 
   useEffect(() => {
@@ -3205,6 +3217,84 @@ export default function App() {
             </label>
             <button className="w-full rounded bg-indigo-500 px-4 py-2 font-semibold hover:bg-indigo-400">変更</button>
           </form>
+        </div>
+      )}
+
+      {/* 終了確認ダイアログ */}
+      {quitDialog && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-[480px] rounded-xl border border-white/10 bg-[#0d1225] shadow-2xl">
+            <div className="border-b border-white/10 px-5 py-4">
+              <h2 className="text-base font-bold text-white">GitHubにプッシュしますか？</h2>
+              <p className="mt-0.5 text-xs text-gray-400">未プッシュの変更があります</p>
+            </div>
+
+            <div className="max-h-56 overflow-y-auto px-5 py-3 text-xs">
+              {quitDialog.added.length > 0 && (
+                <div className="mb-2">
+                  <span className="font-semibold text-emerald-400">新規 ({quitDialog.added.length}件)</span>
+                  {quitDialog.added.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
+                </div>
+              )}
+              {quitDialog.modified.length > 0 && (
+                <div className="mb-2">
+                  <span className="font-semibold text-amber-400">編集済み ({quitDialog.modified.length}件)</span>
+                  {quitDialog.modified.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
+                </div>
+              )}
+              {quitDialog.deleted.length > 0 && (
+                <div className="mb-2">
+                  <span className="font-semibold text-red-400">削除 ({quitDialog.deleted.length}件)</span>
+                  {quitDialog.deleted.map(f => <div key={f} className="mt-0.5 truncate pl-3 text-gray-300">• {f}</div>)}
+                </div>
+              )}
+              {quitDialog.added.length === 0 && quitDialog.modified.length === 0 && quitDialog.deleted.length === 0 && (
+                <p className="text-gray-400">未プッシュのコミットがあります</p>
+              )}
+            </div>
+
+            {quitSteps.length > 0 && (
+              <div className="border-t border-white/10 px-5 py-3">
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">実行中のコマンド</p>
+                {quitSteps.map((step, i) => (
+                  <div key={i} className="flex items-center gap-2 py-0.5 font-mono text-xs">
+                    {step.state === 'running' && <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />}
+                    {step.state === 'done'    && <Check className="h-3 w-3 text-emerald-400" />}
+                    {step.state === 'error'   && <X className="h-3 w-3 text-red-400" />}
+                    {!step.state              && <span className="h-3 w-3" />}
+                    <span className={step.state === 'running' ? 'text-indigo-300' : step.state === 'done' ? 'text-emerald-300' : step.state === 'error' ? 'text-red-300' : 'text-gray-500'}>
+                      {'> '}{step.label}
+                    </span>
+                    {step.error && <span className="text-red-400">{step.error}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2 border-t border-white/10 px-5 py-4">
+              <button
+                onClick={() => { window.electronAPI.sendQuitResponse('push'); }}
+                disabled={quitSteps.length > 0}
+                className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                プッシュして終了
+              </button>
+              <button
+                onClick={() => { window.electronAPI.sendQuitResponse('quit'); }}
+                disabled={quitSteps.length > 0}
+                className="flex-1 rounded-lg bg-white/10 py-2 text-sm font-semibold text-gray-300 hover:bg-white/20 disabled:opacity-50"
+              >
+                そのまま終了
+              </button>
+              <button
+                onClick={() => { window.electronAPI.sendQuitResponse('cancel'); setQuitDialog(null); }}
+                disabled={quitSteps.length > 0}
+                className="rounded-lg bg-white/5 px-4 py-2 text-sm text-gray-400 hover:bg-white/10 disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

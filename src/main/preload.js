@@ -55,5 +55,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeListener('notes-changed', subscription);
     };
-  }
+  },
+
+  // 終了確認ダイアログ
+  onQuitConfirm: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('quit-confirm', subscription);
+    return () => ipcRenderer.removeListener('quit-confirm', subscription);
+  },
+  onQuitProgress: (callback) => {
+    const subscription = (event, data) => callback(data);
+    ipcRenderer.on('quit-progress', subscription);
+    return () => ipcRenderer.removeListener('quit-progress', subscription);
+  },
+  sendQuitResponse: (response) => ipcRenderer.send('quit-response', response),
 });

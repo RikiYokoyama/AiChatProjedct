@@ -290,8 +290,6 @@ function startFileWatcher(notesPath) {
 let isQuitting = false;
 app.on('before-quit', (event) => {
   if (isQuitting || !appConfig.gitRemoteUrl || !appConfig.notesPath) return;
-
-  // 必ず同期でpreventDefaultしてから非同期処理へ
   event.preventDefault();
   isQuitting = true;
 
@@ -310,14 +308,12 @@ app.on('before-quit', (event) => {
         await git.commit('Auto-commit: AI chat log');
         hasPendingCommit = true;
       }
-
-      // 未プッシュのコミット確認（branch名を動的取得）
       if (!hasPendingCommit) {
         try {
           const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
           const log = await git.log([`origin/${branch}..HEAD`]);
           hasPendingCommit = log.total > 0;
-        } catch { /* origin未設定などは無視 */ }
+        } catch { /* origin未設定は無視 */ }
       }
     } catch (err) {
       console.error('Pre-quit status check failed:', err.message);
@@ -325,55 +321,50 @@ app.on('before-quit', (event) => {
       return;
     }
 
-    if (!hasPendingCommit) {
-      app.quit();
-      return;
-    }
+    if (!hasPendingCommit) { app.quit(); return; }
 
-    // 変更ファイルを新規・編集済み・削除に分類
-    const added = statusFiles.filter(f => f.index === 'A' || f.working_dir === '?').map(f => `  • ${f.path}`);
-    const modified = statusFiles.filter(f => f.index === 'M' || f.working_dir === 'M').map(f => `  • ${f.path}`);
-    const deleted = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => `  • ${f.path}`);
+    // renderer にファイル一覧を送ってカスタムダイアログを表示
+    const added    = statusFiles.filter(f => f.index === 'A' || f.working_dir === '?').map(f => f.path);
+    const modified = statusFiles.filter(f => f.index === 'M' || f.working_dir === 'M').map(f => f.path);
+    const deleted  = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => f.path);
+    mainWindow.webContents.send('quit-confirm', { added, modified, deleted });
 
-    let detail = '';
-    if (added.length) detail += `新規 (${added.length}件):\n${added.join('\n')}\n\n`;
-    if (modified.length) detail += `編集済み (${modified.length}件):\n${modified.join('\n')}\n\n`;
-    if (deleted.length) detail += `削除 (${deleted.length}件):\n${deleted.join('\n')}\n\n`;
-    if (!detail) detail = '未プッシュのコミットがあります。';
+    // renderer からの応答を待つ
+    ipcMain.once('quit-response', async (_, response) => {
+      if (response === 'cancel') { isQuitting = false; return; }
 
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: 'question',
-      title: 'GitHubにプッシュしますか？',
-      message: 'GitHubに未プッシュの変更があります',
-      detail: detail.trimEnd(),
-      buttons: ['プッシュして終了', 'そのまま終了', 'キャンセル'],
-      defaultId: 0,
-      cancelId: 2,
-    });
+      if (response === 'push') {
+        const steps = [
+          { label: 'git add .', done: false },
+          { label: 'git commit', done: false },
+          { label: 'git push origin', done: false },
+        ];
+        const send = (i, state, error) => {
+          steps[i] = { ...steps[i], state, error };
+          mainWindow.webContents.send('quit-progress', [...steps]);
+        };
 
-    if (response === 2) {
-      isQuitting = false;
-      return;
-    }
-
-    if (response === 0) {
-      try {
-        await runGitSync();
-      } catch (err) {
-        console.error('Pre-quit push failed:', err.message);
-        const { response: retry } = await dialog.showMessageBox(mainWindow, {
-          type: 'error',
-          title: 'プッシュ失敗',
-          message: `プッシュに失敗しました: ${err.message}`,
-          buttons: ['そのまま終了', 'キャンセル'],
-          defaultId: 0,
-        });
-        if (retry === 1) { isQuitting = false; return; }
+        try {
+          send(0, 'running');
+          // add 済み
+          send(0, 'done');
+          send(1, 'running');
+          // commit 済み
+          send(1, 'done');
+          send(2, 'running');
+          await runGitSync();
+          send(2, 'done');
+          // 少し待ってから終了（完了アニメを見せる）
+          await new Promise(r => setTimeout(r, 800));
+        } catch (err) {
+          send(2, 'error', err.message);
+          await new Promise(r => setTimeout(r, 2000));
+        }
       }
-    }
 
-    hasPendingCommit = false;
-    app.quit();
+      hasPendingCommit = false;
+      app.quit();
+    });
   })();
 });
 
