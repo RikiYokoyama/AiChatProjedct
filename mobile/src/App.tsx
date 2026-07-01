@@ -229,6 +229,17 @@ export default function App() {
   const refreshNotes = useCallback(async () => {
     const cfg = configRef.current;
     if (cfg.gitRemoteUrl) {
+      // カスタムプロンプト（PC版と共有）も合わせて再取得
+      readCustomPromptsFromGitHub(cfg.gitRemoteUrl).then((remotePrompts) => {
+        if (remotePrompts.length > 0) {
+          setConfig((prev) => {
+            const next = { ...prev, customPrompts: remotePrompts as AppConfig['customPrompts'] };
+            saveConfig(next);
+            return next;
+          });
+        }
+      }).catch(() => {});
+
       try {
         const remoteList = await fetchNoteListFromGitHub(cfg.gitRemoteUrl);
         mergeRemoteNotes(remoteList);
