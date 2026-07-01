@@ -289,17 +289,89 @@ function startFileWatcher(notesPath) {
 // ---------- アプリ終了前にpush ----------
 let isQuitting = false;
 app.on('before-quit', async (event) => {
-  if (isQuitting || !appConfig.gitRemoteUrl) return;
-  if (!hasPendingCommit) return;
+  if (isQuitting || !appConfig.gitRemoteUrl || !appConfig.notesPath) return;
+
+  // 未コミットの変更 + 未プッシュのコミットを確認
+  let statusFiles = [];
+  let hasUnpushed = false;
+  try {
+    const git = simpleGit(appConfig.notesPath);
+    const isRepo = await git.checkIsRepo().catch(() => false);
+    if (!isRepo) return;
+
+    // ローカル変更を先にコミット（デバウンス待ちの可能性があるため）
+    clearTimeout(commitDebounceTimer);
+    await git.add('.');
+    const status = await git.status();
+    statusFiles = status.files;
+    if (statusFiles.length > 0) {
+      await git.commit('Auto-commit: AI chat log');
+      hasPendingCommit = true;
+    }
+
+    // 未プッシュのコミットがあるか確認
+    if (hasPendingCommit) {
+      hasUnpushed = true;
+    } else {
+      try {
+        const log = await git.log(['origin/HEAD..HEAD']);
+        hasUnpushed = log.total > 0;
+      } catch { hasUnpushed = false; }
+    }
+  } catch (err) {
+    console.error('Pre-quit status check failed:', err.message);
+    return;
+  }
+
+  if (!hasUnpushed) return;
+
   event.preventDefault();
   isQuitting = true;
-  clearTimeout(commitDebounceTimer);
-  console.log('Running pre-quit sync...');
-  try {
-    await runGitSync();
-  } catch (err) {
-    console.error('Pre-quit sync failed:', err.message);
+
+  // 変更ファイルを新規・編集済みに分類
+  const added = statusFiles.filter(f => f.index === 'A' || f.working_dir === '?').map(f => `  • ${f.path}`);
+  const modified = statusFiles.filter(f => f.index === 'M' || f.working_dir === 'M').map(f => `  • ${f.path}`);
+  const deleted = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => `  • ${f.path}`);
+
+  let detail = '';
+  if (added.length) detail += `新規 (${added.length}件):\n${added.join('\n')}\n\n`;
+  if (modified.length) detail += `編集済み (${modified.length}件):\n${modified.join('\n')}\n\n`;
+  if (deleted.length) detail += `削除 (${deleted.length}件):\n${deleted.join('\n')}\n\n`;
+  if (!detail) detail = '未プッシュのコミットがあります。';
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: 'GitHubにプッシュしますか？',
+    message: 'GitHubに未プッシュの変更があります',
+    detail: detail.trimEnd(),
+    buttons: ['プッシュして終了', 'そのまま終了', 'キャンセル'],
+    defaultId: 0,
+    cancelId: 2,
+  });
+
+  if (response === 2) {
+    // キャンセル
+    isQuitting = false;
+    return;
   }
+
+  if (response === 0) {
+    // プッシュして終了
+    try {
+      await runGitSync();
+    } catch (err) {
+      console.error('Pre-quit push failed:', err.message);
+      const { response: retry } = await dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'プッシュ失敗',
+        message: `プッシュに失敗しました: ${err.message}`,
+        buttons: ['そのまま終了', 'キャンセル'],
+        defaultId: 0,
+      });
+      if (retry === 1) { isQuitting = false; return; }
+    }
+  }
+
   hasPendingCommit = false;
   app.quit();
 });
