@@ -1,6 +1,7 @@
+import type { TouchEvent } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Archive, FileText, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
+import { Archive, FileText, Loader2, Plus, Search, Sparkles, StickyNote, X } from 'lucide-react';
 import { Note, isEmptyNote, noteTitle } from '../lib/notes';
 import SwipeableNoteRow from '../components/SwipeableNoteRow';
 import Fab from '../components/Fab';
@@ -28,6 +29,7 @@ export default function FilesScreen({
   privateMode,
   onVaultClick,
   onSecretUnlock,
+  onRefresh,
 }: {
   notes: Note[];
   recentNames: string[];
@@ -48,6 +50,7 @@ export default function FilesScreen({
   privateMode: boolean;
   onVaultClick: () => void;
   onSecretUnlock: (query: string) => Promise<boolean>;
+  onRefresh: () => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -59,6 +62,45 @@ export default function FilesScreen({
   const [inputValue, setInputValue] = useState('');
   const [selectedAiMode, setSelectedAiMode] = useState('long-explain');
   const [mocUseAi, setMocUseAi] = useState(false);
+
+  // ---------- プルトゥリフレッシュ（GitHub強制再取得） ----------
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartY = useRef<number | null>(null);
+  const PULL_THRESHOLD = 70;
+
+  const handleTouchStart = (e: TouchEvent) => {
+    if (listRef.current && listRef.current.scrollTop <= 0) {
+      touchStartY.current = e.touches[0].clientY;
+    } else {
+      touchStartY.current = null;
+    }
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    if (touchStartY.current === null || isRefreshing) return;
+    const delta = e.touches[0].clientY - touchStartY.current;
+    if (delta > 0 && listRef.current && listRef.current.scrollTop <= 0) {
+      setPullDistance(Math.min(delta * 0.5, 100));
+    }
+  };
+
+  const handleTouchEnd = async () => {
+    if (touchStartY.current === null) return;
+    touchStartY.current = null;
+    if (pullDistance >= PULL_THRESHOLD && !isRefreshing) {
+      setIsRefreshing(true);
+      setPullDistance(PULL_THRESHOLD);
+      try {
+        await onRefresh();
+      } finally {
+        setIsRefreshing(false);
+        setPullDistance(0);
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
 
   const openModal = (type: ModalType) => {
     setModal(type);
@@ -258,7 +300,21 @@ export default function FilesScreen({
       )}
 
       {/* ファイル一覧（仮想スクロール） */}
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-28">
+      <div
+        ref={listRef}
+        className="min-h-0 flex-1 overflow-y-auto px-4 pb-28"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        {(pullDistance > 0 || isRefreshing) && (
+          <div
+            className="flex items-center justify-center overflow-hidden text-gray-400 transition-[height]"
+            style={{ height: pullDistance }}
+          >
+            <Loader2 className={`h-5 w-5 ${isRefreshing || pullDistance >= PULL_THRESHOLD ? 'animate-spin' : ''}`} />
+          </div>
+        )}
         {filtered.length === 0 ? (
           <div className="py-12 text-center text-sm text-gray-500">
             {showArchived ? 'アーカイブされたファイルはありません' : 'ファイルがありません。右下の＋から作成できます'}

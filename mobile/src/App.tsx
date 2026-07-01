@@ -1286,6 +1286,7 @@ export default function App() {
             onArchive={toggleArchive}
             onShare={shareNote}
             onToggleFavorite={toggleFavorite}
+            onRefresh={refreshNotes}
           />
         )}
 
