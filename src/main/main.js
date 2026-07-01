@@ -327,7 +327,8 @@ app.on('before-quit', (event) => {
     const deleted  = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => f.path);
     mainWindow.webContents.send('quit-confirm', { added, modified, deleted, hasPending: hasPendingCommit });
 
-    // renderer からの応答を待つ
+    // renderer からの応答を待つ（古いリスナーを除去してから登録）
+    ipcMain.removeAllListeners('quit-response');
     ipcMain.once('quit-response', async (_, response) => {
       if (response === 'cancel') { isQuitting = false; return; }
 
