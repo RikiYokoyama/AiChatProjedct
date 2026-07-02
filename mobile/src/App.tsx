@@ -199,11 +199,14 @@ export default function App() {
   }, []);
 
   // リモートリストと現在の state をマージ（sha・content は現在値を優先）
+  // 作成直後でGitHubのTrees APIにまだ反映されていないローカル限定のノートを
+  // 誤って消さないよう、remoteListにない prev のノートは残す（置換ではなく和集合）
   const mergeRemoteNotes = useCallback((remoteList: { name: string; remotePath: string; sha: string; updatedAt: string }[]) => {
     setNotes(prev => {
       const prevMap = new Map(prev.map(n => [n.name, n]));
       const nameMap = privateNameMapRef.current;
-      return remoteList.map(r => {
+      const remoteNames = new Set(remoteList.map(r => r.name));
+      const merged = remoteList.map(r => {
         const existing = prevMap.get(r.name);
         // ローカル永続化 or 既存 state から displayName を解決
         const localName = nameMap[r.name];
@@ -216,6 +219,9 @@ export default function App() {
           displayName: existing?.displayName ?? (localName ? localName.replace(/\.md$/i, '') : undefined),
         } as Note;
       });
+      // remoteListにまだ載っていないローカル限定のノート（作成直後の同期ラグ）を保持
+      const localOnly = prev.filter(n => !remoteNames.has(n.name));
+      return [...merged, ...localOnly];
     });
   }, []);
 

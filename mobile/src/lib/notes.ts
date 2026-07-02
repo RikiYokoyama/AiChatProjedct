@@ -13,7 +13,12 @@ export interface Note {
 
 export function cleanFilename(value: string) {
   const name = value.trim().replace(/[\\/:*?"<>|]/g, '-');
-  return name.endsWith('.md') ? name : `${name || 'Untitled'}.md`;
+  let base = name.replace(/\.md$/i, '');
+  if (base.length > 50) {
+    // PC版のパス長制限（Windows/OneDrive環境でのgit pull失敗）を回避するため50文字に切り詰め
+    base = base.slice(0, 50);
+  }
+  return `${base || 'Untitled'}.md`;
 }
 
 export function noteTitle(name: string) {
