@@ -81,7 +81,6 @@ function loadConfig() {
 
 function saveConfig(newConfig) {
   try {
-    const prevNotesPath = appConfig.notesPath;
     appConfig = { ...appConfig, ...newConfig };
 
     if (appConfig.notesPath && !fs.existsSync(appConfig.notesPath)) {
@@ -90,12 +89,6 @@ function saveConfig(newConfig) {
 
     fs.writeFileSync(configFilePath, JSON.stringify(appConfig, null, 2), 'utf8');
 
-    // notesPathが変わったらファイル監視を再起動
-    if (appConfig.notesPath !== prevNotesPath) {
-      startFileWatcher(appConfig.notesPath);
-    }
-    // git URLが設定されたら定期pullを再起動
-    startPeriodicPull();
     ensureGitAttributes(appConfig.notesPath);
 
     return { success: true };
@@ -154,7 +147,16 @@ function migrateRootMdFiles(notesPath) {
   }
 }
 
-async function runGitSync() {
+// runGitSyncInternal の同時実行を防ぐキュー（index.lock競合やrebase中の二重実行を防止）
+let gitSyncQueue = Promise.resolve();
+function runGitSync() {
+  const result = gitSyncQueue.then(() => runGitSyncInternal());
+  // エラーで後続がブロックされないよう、キュー自体は常に解決させる
+  gitSyncQueue = result.catch(() => {});
+  return result;
+}
+
+async function runGitSyncInternal() {
   const notesPath = appConfig.notesPath;
 
   if (!notesPath || !fs.existsSync(notesPath)) {
@@ -201,17 +203,10 @@ async function runGitSync() {
 
     // 3. リモートと同期 (Pull & Push)
     if (appConfig.gitRemoteUrl) {
-      let branchName = 'main';
-
-      try {
-        const branches = await git.branch();
-        const raw = branches.current || '';
-        // "(no branch)" や "(HEAD detached ...)" などの不正な文字列を除外
-        branchName = /^[a-zA-Z0-9/_.-]+$/.test(raw) ? raw : 'main';
-      } catch (err) {
-        await git.checkoutLocalBranch('main');
-        branchName = 'main';
-      }
+      // モバイル版は常に origin の main へ書き込むため、PC版もブランチ名は main に固定する
+      // （ローカルの現在ブランチ名に依存すると、master等の別ブランチに分岐してしまう）
+      const branchName = 'main';
+      await ensureOnMainBranch(git);
 
       // プッシュする前に、他の端末での変更をプルして取り込む
       try {
@@ -243,129 +238,90 @@ async function runGitSync() {
 }
 
 
-// ---------- 自動コミット（ファイル変更後30秒） ----------
-let fileWatcher = null;
-let commitDebounceTimer = null;
-let hasPendingCommit = false;
-
-async function autoCommit() {
-  const notesPath = appConfig.notesPath;
-  if (!notesPath || !fs.existsSync(notesPath) || !appConfig.gitRemoteUrl) return;
-  try {
-    const git = simpleGit(notesPath);
-    const isRepo = await git.checkIsRepo();
-    if (!isRepo) return;
-    migrateRootMdFiles(notesPath);
-    await git.add('.');
-    const status = await git.status();
-    if (status.files.length > 0) {
-      await git.commit('Auto-commit: AI chat log');
-      hasPendingCommit = true;
-      console.log('Auto-committed locally');
-    }
-  } catch (err) {
-    console.error('Auto-commit failed:', err.message);
-  }
-}
-
-function startFileWatcher(notesPath) {
-  if (fileWatcher) { fileWatcher.close(); fileWatcher = null; }
-  if (!notesPath || !fs.existsSync(notesPath)) return;
-  try {
-    fileWatcher = fs.watch(notesPath, { recursive: true }, (eventType, filename) => {
-      if (!filename) return;
-      const normalized = filename.replace(/\\/g, '/');
-      if (!normalized.endsWith('.md')) return;
-      if (normalized.startsWith('backup/')) return;
-      if (/^\d{4}-\d{2}\//.test(normalized)) return;
-      clearTimeout(commitDebounceTimer);
-      commitDebounceTimer = setTimeout(autoCommit, 30000);
-    });
-  } catch (err) {
-    console.error('Failed to start file watcher:', err.message);
-  }
-}
-
 // ---------- アプリ終了前にpush ----------
+let hasPendingCommit = false;
 let isQuitting = false;
-app.on('before-quit', (event) => {
-  if (isQuitting || !appConfig.gitRemoteUrl || !appConfig.notesPath) return;
-  event.preventDefault();
-  isQuitting = true;
 
-  (async () => {
-    let statusFiles = [];
-    try {
-      const git = simpleGit(appConfig.notesPath);
-      const isRepo = await git.checkIsRepo().catch(() => false);
-      if (!isRepo) { app.quit(); return; }
+function setupQuitHandler(win) {
+  win.on('close', (event) => {
+    if (isQuitting) return; // 確認済みなら閉じる
+    event.preventDefault();   // ウィンドウ破棄を同期的に阻止
+    isQuitting = true;
 
-      clearTimeout(commitDebounceTimer);
-      await git.add('.');
-      const status = await git.status();
-      statusFiles = status.files;
-      if (statusFiles.length > 0) {
-        await git.commit('Auto-commit: AI chat log');
-        hasPendingCommit = true;
+    (async () => {
+      // git 設定がない場合はダイアログなしで終了
+      if (!appConfig.gitRemoteUrl || !appConfig.notesPath) {
+        win.destroy();
+        return;
       }
-      if (!hasPendingCommit) {
-        try {
-          const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
-          const log = await git.log([`origin/${branch}..HEAD`]);
-          hasPendingCommit = log.total > 0;
-        } catch { /* origin未設定は無視 */ }
-      }
-    } catch (err) {
-      console.error('Pre-quit status check failed:', err.message);
-      app.quit();
-      return;
-    }
 
-    // 未プッシュの有無に関わらず常にダイアログを表示
-    const added    = statusFiles.filter(f => f.index === 'A' || f.working_dir === '?').map(f => f.path);
-    const modified = statusFiles.filter(f => f.index === 'M' || f.working_dir === 'M').map(f => f.path);
-    const deleted  = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => f.path);
-    mainWindow.webContents.send('quit-confirm', { added, modified, deleted, hasPending: hasPendingCommit });
-
-    // renderer からの応答を待つ（古いリスナーを除去してから登録）
-    ipcMain.removeAllListeners('quit-response');
-    ipcMain.once('quit-response', async (_, response) => {
-      if (response === 'cancel') { isQuitting = false; return; }
-
-      if (response === 'push') {
-        const steps = [
-          { label: 'git add .', done: false },
-          { label: 'git commit', done: false },
-          { label: 'git push origin', done: false },
-        ];
-        const send = (i, state, error) => {
-          steps[i] = { ...steps[i], state, error };
-          mainWindow.webContents.send('quit-progress', [...steps]);
-        };
-
-        try {
-          send(0, 'running');
-          // add 済み
-          send(0, 'done');
-          send(1, 'running');
-          // commit 済み
-          send(1, 'done');
-          send(2, 'running');
-          await runGitSync();
-          send(2, 'done');
-          // 少し待ってから終了（完了アニメを見せる）
-          await new Promise(r => setTimeout(r, 800));
-        } catch (err) {
-          send(2, 'error', err.message);
-          await new Promise(r => setTimeout(r, 2000));
+      let statusFiles = [];
+      try {
+        const git = simpleGit(appConfig.notesPath);
+        const isRepo = await git.checkIsRepo().catch(() => false);
+        if (isRepo) {
+          await git.add('.');
+          const status = await git.status();
+          statusFiles = status.files;
+          if (statusFiles.length > 0) {
+            await git.commit('Auto-commit: AI chat log');
+            hasPendingCommit = true;
+          }
+          if (!hasPendingCommit) {
+            try {
+              const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+              const log = await git.log([`origin/${branch}..HEAD`]);
+              hasPendingCommit = log.total > 0;
+            } catch { /* origin未設定は無視 */ }
+          }
         }
+      } catch (err) {
+        console.error('Pre-quit status check failed:', err.message);
       }
 
-      hasPendingCommit = false;
-      app.quit();
-    });
-  })();
-});
+      // 常にダイアログを表示（git エラーがあっても表示する）
+      const added    = statusFiles.filter(f => f.index === 'A' || f.working_dir === '?').map(f => f.path);
+      const modified = statusFiles.filter(f => f.index === 'M' || f.working_dir === 'M').map(f => f.path);
+      const deleted  = statusFiles.filter(f => f.index === 'D' || f.working_dir === 'D').map(f => f.path);
+      win.webContents.send('quit-confirm', { added, modified, deleted, hasPending: hasPendingCommit });
+
+      // renderer からの応答を待つ（古いリスナーを除去してから登録）
+      ipcMain.removeAllListeners('quit-response');
+      ipcMain.once('quit-response', async (_, response) => {
+        if (response === 'cancel') { isQuitting = false; return; }
+
+        if (response === 'push') {
+          const steps = [
+            { label: 'git add .', done: false },
+            { label: 'git commit', done: false },
+            { label: 'git push origin', done: false },
+          ];
+          const send = (i, state, error) => {
+            steps[i] = { ...steps[i], state, error };
+            win.webContents.send('quit-progress', [...steps]);
+          };
+
+          try {
+            send(0, 'running');
+            send(0, 'done');
+            send(1, 'running');
+            send(1, 'done');
+            send(2, 'running');
+            await runGitSync();
+            send(2, 'done');
+            await new Promise(r => setTimeout(r, 800));
+          } catch (err) {
+            send(2, 'error', err.message);
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+
+        hasPendingCommit = false;
+        win.destroy();
+      });
+    })();
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -387,8 +343,6 @@ function createWindow() {
   });
 
   loadConfig();
-  startFileWatcher(appConfig.notesPath);
-  startPeriodicPull();
   ensureGitAttributes(appConfig.notesPath);
 
   if (isDev) {
@@ -397,6 +351,8 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
+
+  setupQuitHandler(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -980,8 +936,24 @@ ipcMain.handle('vault-lock', async () => {
 
 ipcMain.handle('sync-git', async () => runGitSync());
 
+// モバイル版が常に main へ書き込むため、PC版もブランチをmainに固定する共通処理
+async function ensureOnMainBranch(git) {
+  try {
+    const branches = await git.branch();
+    if (branches.current && branches.current !== 'main') {
+      if (branches.all.includes('main')) {
+        await git.checkout('main');
+      } else {
+        await git.checkoutLocalBranch('main');
+      }
+    }
+  } catch {
+    try { await git.checkoutLocalBranch('main'); } catch { /* 既にmainの場合は無視 */ }
+  }
+}
+
 // 起動時の git pull のみ（push しない）
-ipcMain.handle('startup-git-pull', async () => {
+async function startupGitPullInternal() {
   const notesPath = appConfig.notesPath;
   if (!notesPath || !appConfig.gitRemoteUrl) return { success: true, skipped: true };
   if (!fs.existsSync(notesPath)) return { success: true, skipped: true };
@@ -989,53 +961,59 @@ ipcMain.handle('startup-git-pull', async () => {
     const git = simpleGit(notesPath);
     const isRepo = await git.checkIsRepo();
     if (!isRepo) return { success: true, skipped: true };
-    let branchName = 'main';
-    try {
-      const branches = await git.branch();
-      const raw = branches.current || '';
-      branchName = /^[a-zA-Z0-9/_.-]+$/.test(raw) ? raw : 'main';
-    } catch {}
-    await git.pull('origin', branchName, { '--rebase': 'true' });
+    await ensureOnMainBranch(git);
+    // 未コミット変更（_index.json など）が残っていても rebase が失敗しないよう --autostash
+    await git.pull('origin', 'main', { '--rebase': 'true', '--autostash': null });
     await updateIndex();
     return { success: true };
   } catch (err) {
     console.warn('Startup git pull failed:', err.message);
     return { success: false, error: err.message };
   }
+}
+
+// runGitSync/pullOnly と同じキューに乗せて、起動直後の手動操作との衝突を防ぐ
+ipcMain.handle('startup-git-pull', async () => {
+  const result = gitSyncQueue.then(() => startupGitPullInternal());
+  gitSyncQueue = result.catch(() => {});
+  return result;
 });
 
-// ---------- 定期 git pull（モバイルからの変更を自動取得） ----------
-let periodicPullTimer = null;
-let isPulling = false;
-
-async function periodicPull() {
-  if (isPulling) return;
-  if (!appConfig.notesPath || !appConfig.gitRemoteUrl) return;
-  if (!fs.existsSync(appConfig.notesPath)) return;
-  isPulling = true;
+// ---------- 手動 git pull（リボンバーの「プル」ボタン用） ----------
+async function pullOnlyInternal() {
+  const notesPath = appConfig.notesPath;
+  if (!notesPath || !appConfig.gitRemoteUrl) {
+    return { success: false, error: 'Gitリモートが設定されていません。' };
+  }
+  if (!fs.existsSync(notesPath)) {
+    return { success: false, error: 'Notes folder was not found.' };
+  }
   try {
-    const git = simpleGit(appConfig.notesPath);
+    const git = simpleGit(notesPath);
     const isRepo = await git.checkIsRepo();
-    if (!isRepo) return;
-    let branchName = 'main';
-    try {
-      const branches = await git.branch();
-      const raw = branches.current || '';
-      branchName = /^[a-zA-Z0-9/_.-]+$/.test(raw) ? raw : 'main';
-    } catch {}
-    await git.pull('origin', branchName, { '--rebase': 'true' });
+    if (!isRepo) {
+      return { success: false, error: 'Gitリポジトリが初期化されていません。' };
+    }
+    await ensureOnMainBranch(git);
+    // updateIndex 等でノートリポジトリに未コミット変更（_index.json など）が残っていると
+    // rebase が拒否されるため、--autostash で自動退避・自動復元しながら pull する
+    await git.pull('origin', 'main', { '--rebase': 'true', '--autostash': null });
     mainWindow?.webContents.send('notes-changed');
+    return { success: true };
   } catch (err) {
-    console.warn('Periodic git pull failed:', err.message);
-  } finally {
-    isPulling = false;
+    console.error('Git pull failed:', err.message);
+    return { success: false, error: err.message };
   }
 }
 
-function startPeriodicPull() {
-  if (periodicPullTimer) clearInterval(periodicPullTimer);
-  periodicPullTimer = setInterval(periodicPull, 5 * 60 * 1000); // 5分ごと
+// runGitSync と同じキューに乗せて、pushとpullの同時実行を防ぐ
+function pullOnly() {
+  const result = gitSyncQueue.then(() => pullOnlyInternal());
+  gitSyncQueue = result.catch(() => {});
+  return result;
 }
+
+ipcMain.handle('git-pull-only', async () => pullOnly());
 
 // ノートリポジトリに .gitattributes を設定（競合防止）
 function ensureGitAttributes(notesPath) {
@@ -1132,18 +1110,15 @@ async function updateIndex() {
     const cacheUpdated = { value: false };
     const files = await getAllMarkdownFiles(notesPath, notesPath, cache, cacheUpdated);
     if (cacheUpdated.value) saveMetadataCache(cache);
-    // _index.json / _master_tags.json 自体は除外
+    // _index.json はモバイルが updatedAt 補完にのみ使う。
+    // Contents API の1MB上限を避けるため、必要な {path, updatedAt} だけをインデントなしで出力する。
     const index = files
       .filter(f => !f.name.startsWith('_'))
       .map(f => ({
-        name: f.name,
         path: f.name,
-        tags: f.tags,
         updatedAt: f.updatedAt,
-        isEmpty: f.isEmpty ?? false,
-        isMoc: f.name.startsWith('moc/'),
       }));
-    fs.writeFileSync(path.join(notesPath, '_index.json'), JSON.stringify(index, null, 2), 'utf8');
+    fs.writeFileSync(path.join(notesPath, '_index.json'), JSON.stringify(index), 'utf8');
   } catch (err) {
     console.error('Failed to update index:', err);
   }
@@ -1225,6 +1200,33 @@ ipcMain.handle('save-master-tags', async (event, tags) => {
     if (!fs.existsSync(notesPath)) fs.mkdirSync(notesPath, { recursive: true });
     const filePath = path.join(notesPath, '_master_tags.json');
     fs.writeFileSync(filePath, JSON.stringify(tags, null, 2), 'utf8');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// カスタムプロンプトの読み書き（モバイル版と共有: _custom_prompts.json）
+ipcMain.handle('read-custom-prompts', async () => {
+  try {
+    const notesPath = appConfig.notesPath;
+    if (!notesPath) return [];
+    const filePath = path.join(notesPath, '_custom_prompts.json');
+    if (!fs.existsSync(filePath)) return [];
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('save-custom-prompts', async (event, prompts) => {
+  try {
+    const notesPath = appConfig.notesPath;
+    if (!notesPath) return { success: false };
+    if (!fs.existsSync(notesPath)) fs.mkdirSync(notesPath, { recursive: true });
+    const filePath = path.join(notesPath, '_custom_prompts.json');
+    fs.writeFileSync(filePath, JSON.stringify(prompts, null, 2), 'utf8');
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };

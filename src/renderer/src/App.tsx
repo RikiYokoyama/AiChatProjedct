@@ -10,6 +10,7 @@ import {
   FolderOpen,
   FolderClosed,
   GitBranch,
+  GitPullRequest,
   KeyRound,
   Loader2,
   Lock,
@@ -47,6 +48,7 @@ interface CustomPrompt {
   id: string;
   name: string;
   prompt: string;
+  isPrivate?: boolean; // true = 保管庫（プライベートモード）中のみ表示
 }
 
 interface Note {
@@ -223,6 +225,8 @@ export default function App() {
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [renameNoteTarget, setRenameNoteTarget] = useState<Note | null>(null);
   const [renameNewName, setRenameNewName] = useState('');
+  // Wikiリンク先が存在しない場合の新規作成確認（window.confirmはネイティブダイアログ後にIMEの入力位置がずれる不具合があるため使わない）
+  const [wikiLinkCreateConfirm, setWikiLinkCreateConfirm] = useState<{ targetName: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
 
@@ -315,6 +319,7 @@ export default function App() {
   const [saveOk, setSaveOk] = useState(false);
   const [gitStatus, setGitStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
   const [gitError, setGitError] = useState<string | null>(null);
+  const [gitOperation, setGitOperation] = useState<'push' | 'pull' | null>(null);
 
   const [chatInput, setChatInput] = useState('');
   const [newTagInput, setNewTagInput] = useState('');
@@ -562,10 +567,7 @@ export default function App() {
     if (targetNote) {
       openNote(targetNote);
     } else {
-      const confirmCreate = window.confirm(`ノート "${cleanTargetName}" は存在しません。新しく作成しますか？`);
-      if (confirmCreate) {
-        await createNewWikiNote(cleanTargetName);
-      }
+      setWikiLinkCreateConfirm({ targetName: cleanTargetName });
     }
   };
 
@@ -578,6 +580,14 @@ export default function App() {
       if (!isNaN(d.getTime())) return d;
     }
     return new Date(note.updatedAt);
+  };
+
+  // 作成日時を "YYYY/MM/DD HH:mm" 形式で表示（不正な値は空文字）
+  const formatNoteDateTime = (note: Note): string => {
+    const d = getCreatedDate(note);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
   // 全タグ一覧用データの抽出
@@ -747,11 +757,6 @@ export default function App() {
     } catch (err) {
       console.error('appendToMasterMocLocal failed:', err);
     }
-  }
-
-  async function backgroundSync() {
-    if (!config.gitRemoteUrl) return;
-    await window.electronAPI.syncGit();
   }
 
   async function generateAutoMoc(list: any[], force = false) {
@@ -1001,7 +1006,6 @@ export default function App() {
     await loadNotesList();
     const savedName = result.name ?? name;
     if (!privateMode) appendToMasterMocLocal(savedName).catch(console.error);
-    backgroundSync().catch(console.error);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
     setRibbonView('notes');
@@ -1086,7 +1090,6 @@ export default function App() {
     await loadNotesList();
     const savedName = result.name ?? name;
     if (!privateMode) appendToMasterMocLocal(savedName).catch(console.error);
-    backgroundSync().catch(console.error);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial, displayName: privateMode ? title : undefined };
     await openNote(note);
 
@@ -1197,7 +1200,6 @@ export default function App() {
     await openNote(note);
     setEditMode('edit');
     appendToMasterMocLocal(filename);
-    backgroundSync().catch(console.error);
   }
 
   function renameNote(note: Note) {
@@ -1260,6 +1262,7 @@ export default function App() {
       return SYSTEM_PROMPTS[mode as ChatMode];
     }
     const custom = (config.customPrompts || []).find(p => p.id === mode);
+    if (custom && custom.isPrivate && !privateMode) return SYSTEM_PROMPTS['deep-think'];
     return custom ? custom.prompt : SYSTEM_PROMPTS['deep-think'];
   }
 
@@ -1277,7 +1280,7 @@ export default function App() {
             updated = true;
           }
         } else {
-          const newPrompt = { id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name: p.name, prompt: p.prompt };
+          const newPrompt = { id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name: p.name, prompt: p.prompt, isPrivate: privateMode || undefined };
           nextCustomPrompts.push(newPrompt);
           updated = true;
         }
@@ -1294,11 +1297,11 @@ export default function App() {
       const existingIdx = nextCustomPrompts.findIndex(cp => cp.name.toLowerCase() === name.toLowerCase());
       if (existingIdx >= 0) {
         if (nextCustomPrompts[existingIdx].prompt !== promptText) {
-          nextCustomPrompts[existingIdx] = { id: nextCustomPrompts[existingIdx].id, name, prompt: promptText };
+          nextCustomPrompts[existingIdx] = { ...nextCustomPrompts[existingIdx], name, prompt: promptText };
           updated = true;
         }
       } else {
-        const newPrompt = { id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name, prompt: promptText };
+        const newPrompt = { id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name, prompt: promptText, isPrivate: privateMode || undefined };
         nextCustomPrompts.push(newPrompt);
         updated = true;
       }
@@ -1308,6 +1311,7 @@ export default function App() {
       const newConfig = { ...config, customPrompts: nextCustomPrompts };
       setConfig(newConfig);
       await window.electronAPI.saveConfig(newConfig);
+      window.electronAPI.saveCustomPrompts(nextCustomPrompts);
     }
   }
 
@@ -1320,11 +1324,12 @@ export default function App() {
       alert('同じ名前のプロンプトが既に存在します。');
       return;
     }
-    const newPrompt = { id: `custom-${Date.now()}`, name: name.trim(), prompt: promptText.trim() };
+    const newPrompt = { id: `custom-${Date.now()}`, name: name.trim(), prompt: promptText.trim(), isPrivate: privateMode || undefined };
     nextCustomPrompts.push(newPrompt);
     const newConfig = { ...config, customPrompts: nextCustomPrompts };
     setConfig(newConfig);
     await window.electronAPI.saveConfig(newConfig);
+    window.electronAPI.saveCustomPrompts(nextCustomPrompts);
     setNewPromptName('');
     setNewPromptText('');
   }
@@ -1335,6 +1340,7 @@ export default function App() {
     const newConfig = { ...config, customPrompts: nextCustomPrompts };
     setConfig(newConfig);
     await window.electronAPI.saveConfig(newConfig);
+    window.electronAPI.saveCustomPrompts(nextCustomPrompts);
     if (chatMode === id) {
       setChatMode('deep-think');
     }
@@ -1372,7 +1378,6 @@ export default function App() {
     await loadNotesList();
     const savedName = result.name ?? name;
     appendToMasterMocLocal(savedName).catch(console.error);
-    backgroundSync().catch(console.error);
     const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: initial };
     await openNote(note);
     setEditMode('edit');
@@ -1403,7 +1408,6 @@ export default function App() {
       setStreamedText('');
     }
     await loadNotesList();
-    backgroundSync().catch(console.error);
   }
 
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
@@ -1418,12 +1422,57 @@ export default function App() {
   }
 
 
+  // ローカルとファイル（共有）のカスタムプロンプトをID重複除去でマージ（片方だけの上書きを防ぐ）
+  function mergeCustomPrompts(local: CustomPrompt[], remote: CustomPrompt[]): CustomPrompt[] {
+    const merged = [...local];
+    const localIds = new Set(local.map((p) => p.id));
+    for (const r of remote) {
+      if (!localIds.has(r.id)) merged.push(r);
+    }
+    return merged;
+  }
+
+  // 共有ファイルから読み込み、ローカルとマージして反映（差分があれば書き戻して同期）
+  async function mergeCustomPromptsFromDisk() {
+    const filePrompts = await window.electronAPI.readCustomPrompts();
+    if (!Array.isArray(filePrompts)) return;
+    setConfig((prev) => {
+      const merged = mergeCustomPrompts(prev.customPrompts || [], filePrompts as CustomPrompt[]);
+      if (merged.length !== filePrompts.length) {
+        // ローカルにしかないプロンプトがあった → 共有ファイルにも書き戻す
+        window.electronAPI.saveCustomPrompts(merged);
+      }
+      return { ...prev, customPrompts: merged };
+    });
+  }
+
+  // git操作後にプロンプト・マスタータグをファイルから再読み込みして画面に反映
+  async function refreshSharedSettingsFromDisk() {
+    const tags = await window.electronAPI.readMasterTags();
+    await mergeCustomPromptsFromDisk();
+    setMasterTags(tags);
+  }
+
   async function syncGit() {
     setGitStatus('syncing');
+    setGitOperation('push');
     const result = await window.electronAPI.syncGit();
     setGitStatus(result.success ? 'success' : 'error');
     setGitError(result.error ?? null);
+    setGitOperation(null);
     await loadNotesList();
+    await refreshSharedSettingsFromDisk();
+  }
+
+  async function pullGit() {
+    setGitStatus('syncing');
+    setGitOperation('pull');
+    const result = await window.electronAPI.pullGit();
+    setGitStatus(result.success ? 'success' : 'error');
+    setGitError(result.error ?? null);
+    setGitOperation(null);
+    await loadNotesList();
+    await refreshSharedSettingsFromDisk();
   }
 
   async function handleAutoSave(userPrompt: string, aiReply: string) {
@@ -1495,8 +1544,7 @@ export default function App() {
         if (result.success) {
           const savedName = result.name ?? filename;
           appendToMasterMocLocal(savedName).catch(console.error);
-          backgroundSync().catch(console.error);
-          const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
+                const note: Note = { name: savedName, path: result.path ?? savedName, updatedAt: new Date().toISOString(), content: fullContent, tags: extracted };
           setSelectedNote(note);
           setContent(fullContent);
           setNoteContext(fullContent);
@@ -1658,6 +1706,8 @@ export default function App() {
     window.electronAPI.loadConfig().then((loaded) => {
       setConfig(loaded);
       if (!loaded.geminiApiKey) setRibbonView('settings');
+      // loadConfig の反映後にマージする（先にマージすると loadConfig の setConfig で上書きされてしまうため）
+      mergeCustomPromptsFromDisk();
     });
     window.electronAPI.readMasterTags().then((tags) => setMasterTags(tags));
     // 起動時 git pull → 完了後にノートリスト読み込み＆保管庫確認
@@ -1673,6 +1723,8 @@ export default function App() {
         setVaultExists(s.exists);
         setVaultUnlocked(s.unlocked);
       });
+      // pull直後に最新のカスタムプロンプトをマージ
+      mergeCustomPromptsFromDisk();
     });
     const unsubscribe = window.electronAPI.onGitStatusChanged((status, error) => {
       setGitStatus(status);
@@ -1797,11 +1849,20 @@ export default function App() {
           </div>
           <div className="flex flex-col items-center gap-1">
             <button
-              title="Git同期"
+              title="コミット＆プッシュ"
               onClick={syncGit}
-              className="flex h-10 w-10 items-center justify-center rounded text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
+              disabled={gitStatus === 'syncing'}
+              className="flex h-10 w-10 items-center justify-center rounded text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200 disabled:opacity-50"
             >
-              {gitStatus === 'syncing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+              {gitOperation === 'push' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+            </button>
+            <button
+              title="プル（リモートの変更を取得）"
+              onClick={pullGit}
+              disabled={gitStatus === 'syncing'}
+              className="flex h-10 w-10 items-center justify-center rounded text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200 disabled:opacity-50"
+            >
+              {gitOperation === 'pull' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitPullRequest className="h-4 w-4" />}
             </button>
             <button
               title={vaultUnlocked ? 'プライベート保管庫（解除中・クリックでロック）' : 'プライベート保管庫（クリックで解除）'}
@@ -2248,7 +2309,10 @@ export default function App() {
                         }}
                       >
                         <FileText className={`h-4 w-4 shrink-0 ${empty && selectedNote?.name !== note.name ? 'text-yellow-400' : ''}`} />
-                        <span className="truncate">{note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate">{note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
+                          <span className="truncate text-[11px] text-gray-500">{formatNoteDateTime(note)}</span>
+                        </span>
                       </button>
                     );
                   })
@@ -2578,7 +2642,7 @@ export default function App() {
                   <option value="long-explain">長文詳細説明</option>
                   <option value="prompt-gen">プロンプト作成</option>
                   <option value="long-doc">長文解析</option>
-                  {(config.customPrompts || []).map((cp) => (
+                  {(config.customPrompts || []).filter((cp) => !cp.isPrivate || privateMode).map((cp) => (
                     <option key={cp.id} value={cp.id}>
                       {cp.name}
                     </option>
@@ -2706,15 +2770,6 @@ export default function App() {
                 onChange={(e) => setConfig((prev) => ({ ...prev, gitRemoteUrl: e.target.value }))}
               />
             </label>
-            <label className="mb-5 flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={config.autoSync}
-                onChange={(e) => setConfig((prev) => ({ ...prev, autoSync: e.target.checked }))}
-              />
-              自動同期を有効にする
-            </label>
-
             {/* 暗号化保管庫セクション */}
             <div className="mb-5 border-t border-white/10 pt-4">
               <h3 className="mb-3 text-sm font-semibold text-gray-200">🔒 暗号化保管庫（private/）</h3>
@@ -2758,13 +2813,16 @@ export default function App() {
               
               {/* 登録済みリスト */}
               <div className="mb-4 max-h-36 overflow-y-auto rounded border border-white/10 bg-black/25 p-2 text-xs">
-                {(config.customPrompts || []).length === 0 ? (
+                {(config.customPrompts || []).filter((cp) => !cp.isPrivate || privateMode).length === 0 ? (
                   <div className="py-2 text-center text-gray-500">登録されたカスタムプロンプトはありません</div>
                 ) : (
-                  (config.customPrompts || []).map((cp) => (
+                  (config.customPrompts || []).filter((cp) => !cp.isPrivate || privateMode).map((cp) => (
                     <div key={cp.id} className="flex items-center justify-between border-b border-white/5 py-1.5 last:border-0">
                       <div className="min-w-0 flex-1 pr-2">
-                        <div className="font-semibold text-gray-200 truncate">{cp.name}</div>
+                        <div className="font-semibold text-gray-200 truncate">
+                          {cp.name}
+                          {cp.isPrivate && <span className="ml-1 text-emerald-400">🔒</span>}
+                        </div>
                         <div className="text-gray-400 truncate mt-0.5">{cp.prompt}</div>
                       </div>
                       <button
@@ -2984,7 +3042,7 @@ export default function App() {
                     <option value="long-explain">長文詳細説明</option>
                     <option value="prompt-gen">プロンプト作成</option>
                     <option value="long-doc">長文解析</option>
-                    {(config.customPrompts || []).map((cp) => (
+                    {(config.customPrompts || []).filter((cp) => !cp.isPrivate || privateMode).map((cp) => (
                       <option key={cp.id} value={cp.id}>
                         {cp.name}
                       </option>
@@ -3154,6 +3212,41 @@ export default function App() {
         </div>
       )}
 
+      {/* Wikiリンク先ノート新規作成確認モーダル */}
+      {wikiLinkCreateConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setWikiLinkCreateConfirm(null)}>
+          <div
+            className="w-full max-w-md rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-3 text-lg font-semibold">ノートが見つかりません</h2>
+            <p className="mb-5 text-sm text-gray-300">
+              ノート「{wikiLinkCreateConfirm.targetName}」は存在しません。新しく作成しますか？
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg px-4 py-2 text-sm font-semibold text-gray-300 hover:bg-white/10"
+                onClick={() => setWikiLinkCreateConfirm(null)}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                onClick={async () => {
+                  const { targetName } = wikiLinkCreateConfirm;
+                  setWikiLinkCreateConfirm(null);
+                  await createNewWikiNote(targetName);
+                }}
+              >
+                作成する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 名前変更モーダル */}
       {showRenameModal && renameNoteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setShowRenameModal(false)}>
@@ -3197,8 +3290,7 @@ export default function App() {
 
               setShowRenameModal(false);
               setRenameNoteTarget(null);
-              backgroundSync().catch(console.error);
-            }}
+                      }}
           >
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">ノート名の変更</h2>

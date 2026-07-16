@@ -37,6 +37,7 @@ interface Window {
     saveNote: (data: { filename: string; content: string }) => Promise<{ success: boolean; path?: string; name?: string; error?: string }>;
     renameNote: (data: { oldFilename: string; newFilename: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
     syncGit: () => Promise<{ success: boolean; error?: string }>;
+    pullGit: () => Promise<{ success: boolean; error?: string }>;
     openDirectoryDialog: () => Promise<string | null>;
     openMdFileDialog: () => Promise<Array<{ absolutePath: string; relativePath: string }> | null>;
     saveMdFileDialog: (defaultDir?: string) => Promise<{ absolutePath: string; relativePath: string } | null>;
@@ -55,6 +56,8 @@ interface Window {
     }) => Promise<{ success: boolean; error?: string }>;
     readMasterTags: () => Promise<string[]>;
     saveMasterTags: (tags: string[]) => Promise<{ success: boolean; error?: string }>;
+    readCustomPrompts: () => Promise<unknown[]>;
+    saveCustomPrompts: (prompts: unknown[]) => Promise<{ success: boolean; error?: string }>;
     updateIndex: () => Promise<{ success: boolean }>;
     checkMigration: () => Promise<{ done: boolean }>;
     runMigration: () => Promise<{ success?: boolean; skipped?: boolean; moved?: string[]; error?: string }>;

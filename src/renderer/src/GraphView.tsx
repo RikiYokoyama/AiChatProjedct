@@ -31,7 +31,7 @@ interface GroupRule {
 const defaultSettings = {
   // フィルタ
   searchQuery: '',
-  showTags: true,
+  showTags: false, // タグノードはエッジ数を大きく増やし描画が重くなるためデフォルトOFF
   showAttachments: true,
   existingOnly: false,
   showOrphans: false,
@@ -41,7 +41,7 @@ const defaultSettings = {
   showArrows: false,
   showLinks: false, // リンク線をデフォルトで非表示にする
   showLabels: true, // ファイル名（ラベル）表示
-  textFadeThreshold: 1,
+  textFadeThreshold: 15, // ラベルはズームイン時のみ描画（全ノード常時描画はWebGLの最重負荷のため）
   nodeSize: 1.0,
   linkThickness: 1.0,
   nodeColor: '#a5b4fc', // デフォルトノード色
@@ -64,6 +64,112 @@ function noteId(note: Note) {
 function displayLabel(rawId: string, maxLen = 20): string {
   const base = rawId.split('/').pop() ?? rawId;
   return base.length > maxLen ? base.slice(0, maxLen) + '…' : base;
+}
+
+// 2Dレイアウトの位置計算（画面に描画せず先に計算だけ済ませるための純粋関数）
+// グラフオブジェクトを介さずプレーンな配列/オブジェクトで計算するため、
+// 毎フレームWebGL再描画しながらアニメーションするより大幅に高速
+// 反発力の計算範囲（これより遠いノード同士の反発は無視して良いくらい弱い）
+const REPULSION_CUTOFF = 150;
+// これ未満の総移動量になったら収束とみなして打ち切る
+const CONVERGENCE_THRESHOLD = 0.05;
+
+export interface LayoutStats {
+  nodeCount: number;
+  edgeCount: number;
+  iterations: number;
+  computeMs: number;
+  skipped: boolean; // キャッシュ済みで計算不要だった場合
+}
+
+function computeSettledPositions(
+  nodeIds: string[],
+  edges: { source: string; target: string }[],
+  initialPositions: Record<string, { x: number; y: number }>,
+  fixedIds: Set<string>,
+  maxIterations: number,
+): { positions: Record<string, { x: number; y: number }>; iterations: number } {
+  const pos: Record<string, { x: number; y: number }> = {};
+  const vel: Record<string, { vx: number; vy: number }> = {};
+  nodeIds.forEach((n) => {
+    pos[n] = { ...initialPositions[n] };
+    vel[n] = { vx: 0, vy: 0 };
+  });
+
+  const cellSize = REPULSION_CUTOFF;
+  let usedIterations = maxIterations;
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    // グリッド分割：近傍セルのノード同士だけ反発力を計算する（O(N²) → ほぼO(N)）
+    const grid = new Map<string, string[]>();
+    nodeIds.forEach((n) => {
+      const cx = Math.floor(pos[n].x / cellSize);
+      const cy = Math.floor(pos[n].y / cellSize);
+      const key = `${cx},${cy}`;
+      let bucket = grid.get(key);
+      if (!bucket) { bucket = []; grid.set(key, bucket); }
+      bucket.push(n);
+    });
+
+    nodeIds.forEach((a) => {
+      const cx = Math.floor(pos[a].x / cellSize);
+      const cy = Math.floor(pos[a].y / cellSize);
+      for (let gx = cx - 1; gx <= cx + 1; gx++) {
+        for (let gy = cy - 1; gy <= cy + 1; gy++) {
+          const bucket = grid.get(`${gx},${gy}`);
+          if (!bucket) continue;
+          for (const b of bucket) {
+            if (b === a) continue;
+            let dx = pos[a].x - pos[b].x;
+            let dy = pos[a].y - pos[b].y;
+            let dist2 = dx * dx + dy * dy;
+            if (dist2 < 1) dist2 = 1;
+            if (dist2 > REPULSION_CUTOFF * REPULSION_CUTOFF) continue;
+            const force = 3000 / dist2;
+            const dist = Math.sqrt(dist2);
+            dx /= dist; dy /= dist;
+            vel[a].vx += dx * force;
+            vel[a].vy += dy * force;
+          }
+        }
+      }
+    });
+
+    // ばね力（エッジ）
+    edges.forEach(({ source: a, target: b }) => {
+      if (!pos[a] || !pos[b]) return;
+      const dx = pos[b].x - pos[a].x;
+      const dy = pos[b].y - pos[a].y;
+      const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+      const force = (dist - 110) * 0.01;
+      vel[a].vx += (dx / dist) * force;
+      vel[a].vy += (dy / dist) * force;
+      vel[b].vx -= (dx / dist) * force;
+      vel[b].vy -= (dy / dist) * force;
+    });
+
+    // 中心引力 + 減衰 + 位置更新（固定ノードはスキップ）+ 総移動量の集計（早期収束判定）
+    let totalMovement = 0;
+    nodeIds.forEach((n) => {
+      if (fixedIds.has(n)) return;
+      const v = vel[n];
+      v.vx += -pos[n].x * 0.002;
+      v.vy += -pos[n].y * 0.002;
+      v.vx *= 0.85;
+      v.vy *= 0.85;
+      pos[n].x += v.vx;
+      pos[n].y += v.vy;
+      totalMovement += Math.abs(v.vx) + Math.abs(v.vy);
+    });
+
+    // 十分収束したら残りのイテレーションを打ち切る
+    if (nodeIds.length > 0 && totalMovement / nodeIds.length < CONVERGENCE_THRESHOLD) {
+      usedIterations = iter + 1;
+      break;
+    }
+  }
+
+  return { positions: pos, iterations: usedIterations };
 }
 
 function parseFrontmatterTags(content: string): string[] {
@@ -146,6 +252,13 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
   const isPausedRef = useRef(isPaused);
   const worker2DInstanceRef = useRef<any>(null);
 
+  // 座標リセット時に強制的にレイアウトを再計算させるためのカウンタ
+  // （graph自体は色・サイズ変更でしか再生成されないため、リセットだけでは変わらない）
+  const [layoutResetKey, setLayoutResetKey] = useState(0);
+
+  // レイアウト計算の統計（ノード数・エッジ数・計算時間）を画面表示するため
+  const [layoutStats, setLayoutStats] = useState<LayoutStats | null>(null);
+
   useEffect(() => {
     isPausedRef.current = isPaused;
     if (worker2DInstanceRef.current) {
@@ -159,12 +272,18 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
   // 設定および手動固定座標の読み込み効果
   useEffect(() => {
+    // 軽量デフォルト（showTags: false / textFadeThreshold: 15）への一度きりの移行。
+    // 保存済み設定が旧デフォルトを上書きしてしまうため、未移行なら新デフォルトを強制適用する
+    const perfMigrated = localStorage.getItem('graph_perf_defaults_v1') === 'done';
+
     // まず設定を読み込む
     window.electronAPI.loadGraphSettings().then((saved) => {
       if (saved) {
-        if (saved['2d']) setSettings2D((prev) => ({ ...prev, ...saved['2d'] }));
-        if (saved['3d']) setSettings3D((prev) => ({ ...prev, ...saved['3d'] }));
+        const perfOverride = perfMigrated ? {} : { showTags: false, textFadeThreshold: 15 };
+        if (saved['2d']) setSettings2D((prev) => ({ ...prev, ...saved['2d'], ...perfOverride }));
+        if (saved['3d']) setSettings3D((prev) => ({ ...prev, ...saved['3d'], ...perfOverride }));
       }
+      if (!perfMigrated) localStorage.setItem('graph_perf_defaults_v1', 'done');
       setIsSettingsLoaded(true);
     });
 
@@ -220,12 +339,14 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       fixedNodes3D.current = {};
     }
     saveAllCoordinates();
-    // settings をトリガーして useEffect を再起動
-    setSettings({ ...settings });
+    // レイアウト計算のuseEffectを強制的に再実行させる
+    setLayoutResetKey((k) => k + 1);
   };
 
-  // グラフ構築ロジック（フィルタ・グループ・タグ展開などを適用）
-  const graph = useMemo(() => {
+  // グラフ構造の構築（フィルタ・タグ展開・接続関係のみ。色やサイズなどの見た目は含めない）
+  // 検索ワード入力やノード色・太さのスライダー操作のたびに、O(n²)の逆リンク探索やタグ再パースを
+  // 繰り返さないよう、構造（重い）と見た目（軽い）でuseMemoを分離する
+  const structuralGraph = useMemo(() => {
     const g = new Graph();
     const byId = new Map<string, Note>();
     const noteList = [...notes];
@@ -234,8 +355,9 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     const notesParsed = noteList.map((note) => {
       const parsedTags = parseFrontmatterTags(note.content);
       const allTags = Array.from(new Set([...(note.tags || []), ...parsedTags]));
-      byId.set(noteId(note).toLowerCase(), { ...note, tags: allTags });
-      return { ...note, tags: allTags };
+      const merged = { ...note, tags: allTags };
+      byId.set(noteId(note).toLowerCase(), merged);
+      return merged;
     });
 
     let activeNotes = notesParsed;
@@ -254,6 +376,17 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     // ローカルグラフのフィルタリング（深さ優先探索/幅優先探索）
     if (isLocal && centerNoteName) {
+      // 逆リンク（自分をリンクしているノート）を1回だけ構築してO(n²)を回避
+      const reverseLinks = new Map<string, string[]>();
+      notesParsed.forEach((n) => {
+        const sid = noteId(n).toLowerCase();
+        n.wikiLinks?.forEach((link) => {
+          const tid = link.toLowerCase();
+          if (!reverseLinks.has(tid)) reverseLinks.set(tid, []);
+          reverseLinks.get(tid)!.push(sid);
+        });
+      });
+
       const startId = centerNoteName.replace(/\.md$/i, '').toLowerCase();
       const visited = new Set<string>();
       visited.add(startId);
@@ -265,7 +398,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         const nextLevel = new Set<string>();
         currentLevel.forEach((nid) => {
           // 該当ノートを探す
-          const noteObj = notesParsed.find((n) => noteId(n).toLowerCase() === nid);
+          const noteObj = byId.get(nid);
           if (noteObj) {
             // wikiLinksの接続先を収集
             noteObj.wikiLinks?.forEach((link) => {
@@ -277,14 +410,11 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
             });
           }
           // 逆に、このノートをリンクしている他のノートも逆方向に辿る
-          notesParsed.forEach((n) => {
-            const sid = noteId(n).toLowerCase();
-            n.wikiLinks?.forEach((link) => {
-              if (link.toLowerCase() === nid && !visited.has(sid)) {
-                visited.add(sid);
-                nextLevel.add(sid);
-              }
-            });
+          (reverseLinks.get(nid) || []).forEach((sid) => {
+            if (!visited.has(sid)) {
+              visited.add(sid);
+              nextLevel.add(sid);
+            }
           });
         });
         currentLevel = nextLevel;
@@ -300,32 +430,10 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     // 1. ノード追加（ノートノード）
     activeNotes.forEach((note) => {
       const id = noteId(note);
-      let color = settings.nodeColor; // デフォルトノード色
-
-      // グループルールの適用
-      for (const rule of groupRules) {
-        if (
-          id.toLowerCase().includes(rule.query.toLowerCase()) ||
-          note.tags?.some((t) => t.toLowerCase().includes(rule.query.toLowerCase()))
-        ) {
-          color = rule.color;
-          break;
-        }
-      }
-
-      // 検索ワード一致によるハイライト
-      if (settings.searchQuery.trim()) {
-        const query = settings.searchQuery.toLowerCase();
-        if (!id.toLowerCase().includes(query) && !note.tags?.some((t) => t.toLowerCase().includes(query))) {
-          // 検索に一致しないノードは暗めのグレーにする
-          color = '#334155';
-        }
-      }
-
       g.addNode(id, {
         label: displayLabel(id),
-        size: settings.nodeSize * 8,
-        color: color,
+        kind: 'note',
+        tags: note.tags || [],
         updatedAt: note.updatedAt,
       });
     });
@@ -343,26 +451,16 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
       tagMap.forEach((nids, tag) => {
         const tagNodeId = `#${tag}`;
-        let color = '#34d399'; // タグ用のデフォルト色（エメラルド）
-        
-        // タグに対するグループ色
-        for (const rule of groupRules) {
-          if (tag.toLowerCase().includes(rule.query.toLowerCase())) {
-            color = rule.color;
-            break;
-          }
-        }
-
         g.addNode(tagNodeId, {
           label: displayLabel(tagNodeId),
-          size: settings.nodeSize * 6,
-          color: color,
+          kind: 'tag',
+          tagName: tag,
         });
 
         // タグから各ノートへのリンクを追加
         nids.forEach((nid) => {
           if (g.hasNode(nid)) {
-            g.addEdge(tagNodeId, nid, { color: '#10b981', size: settings.linkThickness * 0.8 });
+            g.addEdge(tagNodeId, nid, { kind: 'tag' });
           }
         });
       });
@@ -382,16 +480,14 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
         if (!g.hasNode(target)) {
           // 存在しない（空のリンク）だがフィルタを通過したノードを追加
-          let color = '#475569';
           g.addNode(target, {
             label: displayLabel(target),
-            size: settings.nodeSize * 5,
-            color: color,
+            kind: 'unresolved',
           });
         }
 
         if (source !== target && !g.hasEdge(source, target)) {
-          g.addEdge(source, target, { color: settings.linkColor, size: settings.linkThickness });
+          g.addEdge(source, target, { kind: 'wiki' });
         }
       });
     });
@@ -406,7 +502,66 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
     }
 
     return g;
-  }, [notes, settings, groupRules, isLocal, centerNoteName, localDepth]);
+  }, [notes, settings.excludePattern, settings.showTags, settings.existingOnly, settings.showOrphans, isLocal, centerNoteName, localDepth]);
+
+  // 見た目（色・サイズ）の適用。構造は再計算せず属性を上書きするだけなので軽い
+  const graph = useMemo(() => {
+    const g = structuralGraph.copy();
+
+    g.forEachNode((node, attrs) => {
+      if (attrs.kind === 'tag') {
+        let color = '#34d399'; // タグ用のデフォルト色（エメラルド）
+        for (const rule of groupRules) {
+          if ((attrs.tagName as string).toLowerCase().includes(rule.query.toLowerCase())) {
+            color = rule.color;
+            break;
+          }
+        }
+        g.setNodeAttribute(node, 'color', color);
+        g.setNodeAttribute(node, 'size', settings.nodeSize * 6);
+        return;
+      }
+
+      if (attrs.kind === 'unresolved') {
+        g.setNodeAttribute(node, 'color', '#475569');
+        g.setNodeAttribute(node, 'size', settings.nodeSize * 5);
+        return;
+      }
+
+      // 通常のノートノード
+      const tags: string[] = attrs.tags || [];
+      let color = settings.nodeColor;
+      for (const rule of groupRules) {
+        if (
+          node.toLowerCase().includes(rule.query.toLowerCase()) ||
+          tags.some((t) => t.toLowerCase().includes(rule.query.toLowerCase()))
+        ) {
+          color = rule.color;
+          break;
+        }
+      }
+      if (settings.searchQuery.trim()) {
+        const query = settings.searchQuery.toLowerCase();
+        if (!node.toLowerCase().includes(query) && !tags.some((t) => t.toLowerCase().includes(query))) {
+          color = '#334155';
+        }
+      }
+      g.setNodeAttribute(node, 'color', color);
+      g.setNodeAttribute(node, 'size', settings.nodeSize * 8);
+    });
+
+    g.forEachEdge((edge, attrs) => {
+      if (attrs.kind === 'tag') {
+        g.setEdgeAttribute(edge, 'color', '#10b981');
+        g.setEdgeAttribute(edge, 'size', settings.linkThickness * 0.8);
+      } else {
+        g.setEdgeAttribute(edge, 'color', settings.linkColor);
+        g.setEdgeAttribute(edge, 'size', settings.linkThickness);
+      }
+    });
+
+    return g;
+  }, [structuralGraph, groupRules, settings.nodeColor, settings.nodeSize, settings.searchQuery, settings.linkColor, settings.linkThickness]);
 
   // フィルタリング後の動的表示ノード・エッジ
   const activeElements = useMemo(() => {
@@ -438,17 +593,52 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
 
     const nodesArray = subGraph.nodes();
 
-    // 初期2D配置 (手動固定された座標がある場合は適用、なければ円形配置)
+    // 初期位置（キャッシュ済み座標があればそれ、なければ円形配置）
+    const initialPositions: Record<string, { x: number; y: number }> = {};
     subGraph.nodes().forEach((node, index) => {
       if (fixedNodes2D.current[node]) {
-        subGraph.setNodeAttribute(node, 'x', fixedNodes2D.current[node].x);
-        subGraph.setNodeAttribute(node, 'y', fixedNodes2D.current[node].y);
+        initialPositions[node] = { ...fixedNodes2D.current[node] };
       } else {
         const angle = (Math.PI * 2 * index) / Math.max(subGraph.order, 1);
-        subGraph.setNodeAttribute(node, 'x', Math.cos(angle) * 100);
-        subGraph.setNodeAttribute(node, 'y', Math.sin(angle) * 100);
+        initialPositions[node] = { x: Math.cos(angle) * 100, y: Math.sin(angle) * 100 };
       }
     });
+
+    const edgesForLayout = activeElements.edges.map((e) => ({ source: e.source, target: e.target }));
+    const cachedIds = new Set(nodesArray.filter((n) => fixedNodes2D.current[n]));
+    const allCached = nodesArray.length > 0 && cachedIds.size === nodesArray.length;
+
+    // キャッシュに無いノードがある場合のみ、画面に描画する前に位置を計算し切る
+    // （毎フレーム描画しながらアニメーションすると重く見えるため、先に計算→結果を一度だけ描画）
+    const computeStart = performance.now();
+    let settledPositions: Record<string, { x: number; y: number }>;
+    let usedIterations = 0;
+    if (allCached) {
+      settledPositions = initialPositions;
+    } else {
+      const result = computeSettledPositions(nodesArray, edgesForLayout, initialPositions, cachedIds, 150);
+      settledPositions = result.positions;
+      usedIterations = result.iterations;
+    }
+    const computeMs = performance.now() - computeStart;
+    setLayoutStats({
+      nodeCount: nodesArray.length,
+      edgeCount: edgesForLayout.length,
+      iterations: usedIterations,
+      computeMs,
+      skipped: allCached,
+    });
+
+    subGraph.nodes().forEach((node) => {
+      subGraph.setNodeAttribute(node, 'x', settledPositions[node].x);
+      subGraph.setNodeAttribute(node, 'y', settledPositions[node].y);
+    });
+
+    // 計算済みの位置をキャッシュに保存（次回オープン時は再計算不要にする）
+    nodesArray.forEach((node) => {
+      fixedNodes2D.current[node] = { ...settledPositions[node] };
+    });
+    saveAllCoordinates();
 
     const sigma = new Sigma(subGraph, containerRef2D.current, {
       renderEdgeLabels: false,
@@ -552,7 +742,8 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       }
     }
 
-    rafId = requestAnimationFrame(loop);
+    // 位置は既に計算済み・固定済みのため、ループは自動開始しない
+    // （「一時停止/再生」ボタンから手動で再開した場合のみ動く）
 
     const springWorker = {
       stop: () => { cancelAnimationFrame(rafId); },
@@ -647,7 +838,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
         containerRef2D.current.innerHTML = '';
       }
     };
-  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, settings2D.nodeColor, settings2D.linkColor]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, settings2D.showLinks, settings2D.showLabels, settings2D.textFadeThreshold, settings2D.centerForce, settings2D.repulsion, settings2D.nodeSize, settings2D.linkThickness, notes, settings2D.nodeColor, settings2D.linkColor, layoutResetKey]);
 
   // リンク表示やファイル名表示の切り替え時にSigmaを再描画
   useEffect(() => {
@@ -1246,7 +1437,7 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
       lineMaterialRef.current = null;
       coneMaterialRef.current = null;
     };
-  }, [graph, activeElements, viewMode, isSettingsLoaded, groupRules, notes, settings3D.textFadeThreshold, settings3D.nodeColor, settings3D.linkColor]);
+  }, [graph, activeElements, viewMode, isSettingsLoaded, groupRules, notes, settings3D.textFadeThreshold, settings3D.nodeColor, settings3D.linkColor, layoutResetKey]);
 
   // 3D リンク表示・矢印表示・カラー・太さの切り替え時にマテリアルの不透明度や色・太さを動的に更新
   useEffect(() => {
@@ -1606,6 +1797,47 @@ export default function GraphView({ notes, onSelectNote, onClose, isLocal = fals
               </button>
             </div>
           </div>
+
+          {/* レイアウト計算の統計 */}
+          {layoutStats && (
+            <div className="pt-2 border-t border-white/10 space-y-2">
+              <span className="font-medium text-gray-300 block">レイアウト計算の負荷</span>
+              <div className="space-y-1.5 text-[11px] text-gray-400">
+                <div className="flex justify-between">
+                  <span>ノード数</span>
+                  <span className="text-gray-200">{layoutStats.nodeCount.toLocaleString()}</span>
+                </div>
+                <div className="h-1.5 w-full rounded bg-gray-800 overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500"
+                    style={{ width: `${Math.min(100, (layoutStats.nodeCount / 2000) * 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between">
+                  <span>エッジ数</span>
+                  <span className="text-gray-200">{layoutStats.edgeCount.toLocaleString()}</span>
+                </div>
+                <div className="h-1.5 w-full rounded bg-gray-800 overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500"
+                    style={{ width: `${Math.min(100, (layoutStats.edgeCount / 4000) * 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between">
+                  <span>計算時間</span>
+                  <span className="text-gray-200">
+                    {layoutStats.skipped ? 'キャッシュ利用（計算なし）' : `${layoutStats.computeMs.toFixed(0)}ms（${layoutStats.iterations}回）`}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded bg-gray-800 overflow-hidden">
+                  <div
+                    className={`h-full ${layoutStats.computeMs > 1000 ? 'bg-red-500' : layoutStats.computeMs > 300 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${layoutStats.skipped ? 0 : Math.min(100, (layoutStats.computeMs / 2000) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ノードの動き制御 */}
           <div className="pt-2 border-t border-white/10 space-y-2">
