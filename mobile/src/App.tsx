@@ -773,8 +773,8 @@ export default function App() {
         if (sha) {
           await deleteNoteOnGitHub(config.gitRemoteUrl, note.remotePath, sha);
         }
-        // 計画C: _index.json からエントリを削除
-        removeEntryFromIndex(config.gitRemoteUrl, note.name).catch(() => {});
+        // 計画C: _index.json からエントリを削除（フルパスで一致判定）
+        removeEntryFromIndex(config.gitRemoteUrl, note.remotePath).catch(() => {});
       } catch (err) {
         console.error('GitHub削除エラー:', err);
         alert('GitHubからの削除に失敗しました: ' + (err instanceof Error ? err.message : String(err)));

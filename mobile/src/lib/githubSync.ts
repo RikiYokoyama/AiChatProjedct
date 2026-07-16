@@ -117,7 +117,42 @@ export class GitHubSync {
     if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const name = remotePath.split('/').pop() || remotePath;
-    return { name, path: remotePath, sha: data.sha, content: decodeBase64Utf8(data.content) };
+    // Contents APIは1MB超のファイルで content を空文字にして返す（base64デコードすると空になる）
+    return { name, path: remotePath, sha: data.sha, content: decodeBase64Utf8(data.content ?? '') };
+  }
+
+  // raw メディアタイプで生の中身を直接取得（1MB上限を回避し最大100MBまで対応）。shaは取得しない
+  async fetchRemoteFileRaw(remotePath: string): Promise<string> {
+    const encodedPath = remotePath.split('/').map(encodeURIComponent).join('/');
+    const refParam = this.branch ? `?ref=${encodeURIComponent(this.branch)}` : '';
+    const res = await fetch(
+      `${API}/repos/${this.repo}/contents/${encodedPath}${refParam}`,
+      { headers: { ...this.headers(), Accept: 'application/vnd.github.raw' } },
+    );
+    if (!res.ok) throw new Error(`GitHub API error ${res.status}: ${await res.text()}`);
+    return await res.text();
+  }
+
+  // 読み書き用に _index.json 相当のJSON配列とshaを取得（1MB超でもrawでフォールバック）
+  async fetchJsonForWrite(remotePath: string): Promise<{ data: unknown[]; sha?: string }> {
+    let sha: string | undefined;
+    let text = '';
+    try {
+      const obj = await this.fetchRemoteFile(remotePath);
+      sha = obj.sha;
+      text = obj.content;
+    } catch {
+      return { data: [], sha: undefined };
+    }
+    if (!text) {
+      try { text = await this.fetchRemoteFileRaw(remotePath); } catch { text = ''; }
+    }
+    try {
+      const parsed = JSON.parse(text);
+      return { data: Array.isArray(parsed) ? parsed : [], sha };
+    } catch {
+      return { data: [], sha };
+    }
   }
 
   async deleteFile(remotePath: string, sha: string): Promise<void> {
@@ -316,32 +351,29 @@ export class GitHubSync {
     return result;
   }
 
-  private async updateRemoteIndex(state: SyncState): Promise<void> {
+  private async updateRemoteIndex(_state: SyncState): Promise<void> {
     try {
       const remoteList = await this.fetchRemoteList();
-      // 既存の _index.json から updatedAt を保持するためのマップ
+      // 既存の _index.json から updatedAt を保持するためのマップ（フルパスをキーに）
       const existingUpdatedAt = new Map<string, string>();
       let existingSha: string | undefined;
       try {
-        const existingFile = await this.fetchRemoteFile('_index.json');
-        existingSha = existingFile.sha;
-        const existingIndex = JSON.parse(existingFile.content) as Array<{ name: string; updatedAt?: string }>;
-        for (const e of existingIndex) {
-          if (e.updatedAt) existingUpdatedAt.set(e.name, e.updatedAt);
+        const { data, sha } = await this.fetchJsonForWrite('_index.json');
+        existingSha = sha;
+        for (const e of data as Array<{ path?: string; name?: string; updatedAt?: string }>) {
+          const p = e.path ?? e.name;
+          if (p && e.updatedAt) existingUpdatedAt.set(p, e.updatedAt);
         }
       } catch { /* _index.json がなければ無視 */ }
 
+      // {path, updatedAt} のみをインデントなしで出力（Contents APIの1MB上限対策）
       const index = remoteList
         .filter(f => !f.name.startsWith('_'))
         .map(f => ({
-          name: f.name,
           path: f.path,
-          sha: f.sha,
-          updatedAt: existingUpdatedAt.get(f.name) ?? new Date().toISOString(),
-          remotePath: state.remotePaths[f.name] ?? f.path,
-          isMoc: f.path.startsWith('moc/'),
+          updatedAt: existingUpdatedAt.get(f.path) ?? new Date().toISOString(),
         }));
-      const content = JSON.stringify(index, null, 2);
+      const content = JSON.stringify(index);
       try {
         await this.putFile('_index.json', content, existingSha);
       } catch {
@@ -425,34 +457,32 @@ export async function fetchNoteListFromGitHub(gitRemoteUrl: string): Promise<Rem
   const sync = new GitHubSync(token, repo, branch);
 
   // Git Trees API と _index.json を並列取得
-  const [tree, indexResult] = await Promise.all([
+  // _index.json は 1MB を超えると Contents API では読めないため raw で取得する
+  const [tree, indexText] = await Promise.all([
     sync.fetchRemoteList(),
-    sync.fetchRemoteFile('_index.json').catch(() => null),
+    sync.fetchRemoteFileRaw('_index.json').catch(() => null),
   ]);
 
-  // _index.json からメタデータ（updatedAt）を補完
-  const metaMap = new Map<string, { updatedAt: string }>();
-  if (indexResult) {
+  // _index.json からメタデータ（updatedAt）をフルパスをキーに補完（同名ファイルの取り違え防止）
+  const metaMap = new Map<string, string>(); // フルパス → updatedAt
+  if (indexText) {
     try {
-      const index = JSON.parse(indexResult.content) as Array<{ name: string; updatedAt: string }>;
+      const index = JSON.parse(indexText) as Array<{ path?: string; name?: string; updatedAt: string }>;
       for (const e of index) {
-        const fileName = e.name.split('/').pop() ?? e.name;
-        metaMap.set(fileName, { updatedAt: e.updatedAt ?? new Date().toISOString() });
+        const p = e.path ?? e.name; // 新形式は path、旧形式は name（どちらもフルパス）
+        if (p && e.updatedAt) metaMap.set(p, e.updatedAt);
       }
     } catch { /* パース失敗は無視 */ }
   }
 
   const list = tree
     .filter(f => !f.name.startsWith('_'))
-    .map(f => {
-      const meta = metaMap.get(f.name);
-      return {
-        name: f.name,
-        remotePath: f.path,
-        sha: f.sha,
-        updatedAt: meta?.updatedAt ?? new Date().toISOString(),
-      };
-    });
+    .map(f => ({
+      name: f.name,
+      remotePath: f.path,
+      sha: f.sha,
+      updatedAt: metaMap.get(f.path) ?? new Date().toISOString(),
+    }));
 
   // キャッシュを更新
   saveNoteListCache(list).catch(() => {});
@@ -560,7 +590,9 @@ export function currentYearMonth(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
-/** _index.json に新規エントリを追加（作成時のみ呼ぶ・失敗しても無視） */
+/** _index.json に新規エントリを追加（作成時のみ呼ぶ・失敗しても無視）
+ *  索引は {path, updatedAt} のみを保持しコンパクト（インデントなし）で書き出す。
+ *  フルパスをキーに一致判定する。 */
 export async function addEntryToIndex(
   gitRemoteUrl: string,
   entry: { name: string; path: string; updatedAt: string; isMoc: boolean },
@@ -568,21 +600,20 @@ export async function addEntryToIndex(
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return;
   const sync = new GitHubSync(token, repo, branch);
+  const newEntry = { path: entry.path, updatedAt: entry.updatedAt };
   try {
-    const file = await sync.fetchRemoteFile('_index.json');
-    const index: unknown[] = JSON.parse(file.content);
-    // 同名エントリが既にあれば更新、なければ追加
-    const idx = (index as Array<{ name: string }>).findIndex(e => e.name === entry.name);
+    const { data, sha } = await sync.fetchJsonForWrite('_index.json');
+    const index = data as Array<{ path?: string; name?: string; updatedAt: string }>;
+    const idx = index.findIndex(e => (e.path ?? e.name) === entry.path);
     if (idx >= 0) {
-      index[idx] = entry;
+      index[idx] = newEntry;
     } else {
-      index.push(entry);
+      index.push(newEntry);
     }
-    await sync.putFile('_index.json', JSON.stringify(index, null, 2), file.sha);
+    await sync.putFile('_index.json', JSON.stringify(index), sha);
   } catch {
-    // _index.json がない場合は新規作成
     try {
-      await sync.putFile('_index.json', JSON.stringify([entry], null, 2));
+      await sync.putFile('_index.json', JSON.stringify([newEntry]));
     } catch { /* silent */ }
   }
 }
@@ -630,20 +661,20 @@ export async function deleteNoteOnGitHub(
   await new GitHubSync(token, repo, branch).deleteFile(remotePath, sha);
 }
 
-/** _index.json から指定エントリを削除（失敗しても無視） */
+/** _index.json から指定エントリ（フルパス）を削除（失敗しても無視） */
 export async function removeEntryFromIndex(
   gitRemoteUrl: string,
-  name: string,
+  remotePath: string,
 ): Promise<void> {
   const { token, repo, branch } = parseRemoteUrl(gitRemoteUrl);
   if (!token || !repo) return;
   const sync = new GitHubSync(token, repo, branch);
   try {
-    const file = await sync.fetchRemoteFile('_index.json');
-    const index = JSON.parse(file.content) as Array<{ name: string }>;
-    const filtered = index.filter(e => e.name !== name);
+    const { data, sha } = await sync.fetchJsonForWrite('_index.json');
+    const index = data as Array<{ path?: string; name?: string }>;
+    const filtered = index.filter(e => (e.path ?? e.name) !== remotePath);
     if (filtered.length !== index.length) {
-      await sync.putFile('_index.json', JSON.stringify(filtered, null, 2), file.sha);
+      await sync.putFile('_index.json', JSON.stringify(filtered), sha);
     }
   } catch { /* silent */ }
 }
