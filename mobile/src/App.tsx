@@ -304,6 +304,10 @@ export default function App() {
     const timer = setTimeout(async () => {
       const cfg = configRef.current;
       const content = noteTabContentRef.current;
+      // 開いた直後は content が空（selectNoteForNoteTab が一旦クリア→非同期で本文取得）。
+      // 本文ロードが 1200ms より遅いと、この空内容で GitHub 上の本文を上書きして
+      // ノートが消える競合が起きるため、空内容の自動保存は必ずスキップする。
+      if (!content || !content.trim()) return;
       if (cfg.gitRemoteUrl) {
         // GitHub 直接書き込み
         const note = notesRef.current.find(n => n.name === noteTabSelectedName);
