@@ -54,6 +54,14 @@ export function extractCreatedAt(content: string): string | null {
   return isNaN(dt.getTime()) ? null : dt.toISOString();
 }
 
+// ISO文字列 or 日付文字列を "YYYY/MM/DD HH:mm" 形式で表示（不正な値は空文字）
+export function formatDateTime(value: string): string {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function buildNote(name: string, content: string, updatedAt?: string): Note {
   return {
     name,

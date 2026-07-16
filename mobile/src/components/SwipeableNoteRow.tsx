@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Archive, FileText, Share2, Star, Trash2 } from 'lucide-react';
-import { Note, noteTitle } from '../lib/notes';
+import { Note, noteTitle, formatDateTime } from '../lib/notes';
 
 // 左スワイプ: 削除・アーカイブ / 右スワイプ: 共有・お気に入り
 export default function SwipeableNoteRow({
@@ -124,7 +124,7 @@ export default function SwipeableNoteRow({
             </span>
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
-            <span>{new Date(note.updatedAt).toLocaleDateString()}</span>
+            <span>{formatDateTime(note.updatedAt)}</span>
             {note.tags.slice(0, 3).map((tag) => (
               <span key={tag} className="text-emerald-400/80">#{tag}</span>
             ))}

@@ -160,8 +160,10 @@ export default function FilesScreen({
       if (fa !== fb) return fa - fb;
       if (sortBy === 'name-asc') return a.name.localeCompare(b.name, 'ja');
       if (sortBy === 'name-desc') return b.name.localeCompare(a.name, 'ja');
-      if (sortBy === 'date-asc') return a.updatedAt.localeCompare(b.updatedAt);
-      return b.updatedAt.localeCompare(a.updatedAt);
+      const ta = new Date(a.updatedAt).getTime() || 0;
+      const tb = new Date(b.updatedAt).getTime() || 0;
+      if (sortBy === 'date-asc') return ta - tb;
+      return tb - ta;
     });
   }, [notes, query, archived, favorites, showArchived, view, sortBy, folderFilter]);
 
