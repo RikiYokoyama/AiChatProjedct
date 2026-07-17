@@ -474,16 +474,17 @@ function loadMetadataCache() {
     if (fs.existsSync(cacheFilePath)) {
       const data = fs.readFileSync(cacheFilePath, 'utf8');
       const cacheObj = JSON.parse(data);
-      // バージョンが違う（ハッシュタグ廃止前の古いキャッシュ）場合は再構築のためクリアする
-      if (cacheObj._version !== 2) {
-        return { _version: 2 };
+      // バージョンが違う古いキャッシュは再構築のためクリアする
+      // v3: gitCreatedAt（本文から日時が取れない場合のgit追加日時）を追加
+      if (cacheObj._version !== 3) {
+        return { _version: 3 };
       }
       return cacheObj;
     }
   } catch (err) {
     console.error('Failed to load metadata cache:', err);
   }
-  return { _version: 2 };
+  return { _version: 3 };
 }
 
 function saveMetadataCache(cache) {
@@ -496,13 +497,43 @@ function saveMetadataCache(cache) {
 
 // タグ抽出（先頭20,000文字制限でReDoS/フリーズ防止）
 // 作成日時行 "作成日時: YYYY/MM/DD HH:mm" → ISO文字列（失敗時はnull）
+// 見つからない場合は frontmatter の "date: YYYY-MM-DD" にもフォールバックする
 function extractCreatedAt(content) {
   if (!content) return null;
   const m = content.match(/^作成日時[:：]\s*(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/m);
-  if (!m) return null;
-  const [, y, mo, d, h = '0', min = '0'] = m;
-  const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min));
-  return isNaN(dt.getTime()) ? null : dt.toISOString();
+  if (m) {
+    const [, y, mo, d, h = '0', min = '0'] = m;
+    const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min));
+    if (!isNaN(dt.getTime())) return dt.toISOString();
+  }
+  // frontmatter (--- で囲まれた先頭ブロック) の date: を読む
+  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (fm) {
+    const dm = fm[1].match(/^date[:：]\s*['"]?(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[T\s](\d{1,2}):(\d{2}))?/m);
+    if (dm) {
+      const [, y, mo, d, h = '0', min = '0'] = dm;
+      const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(min));
+      if (!isNaN(dt.getTime())) return dt.toISOString();
+    }
+  }
+  return null;
+}
+
+// 本文から作成日時が取れないノート用のフォールバック。
+// git にそのファイルが最初に追加された日時を返す（失敗時null）。
+// mtime は git pull/checkout で一斉に書き換わり全ノートが同じ日時になるため、
+// git 履歴に基づく安定した日時を優先する。
+async function getGitAddedDate(notesPath, relativePath) {
+  try {
+    const git = simpleGit(notesPath);
+    const out = await git.raw(['log', '--diff-filter=A', '--format=%aI', '-1', '--', relativePath]);
+    const iso = (out || '').trim().split('\n')[0];
+    if (!iso) return null;
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  } catch {
+    return null;
+  }
 }
 
 // content の作成日時（なければ現在時刻）から "YYYY-MM" を返す
@@ -670,7 +701,9 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
                   console.error(`Private decrypt failed (${relativePath}):`, err.message);
                 }
               }
-              results.push({ name: relativePath, path: filePath, updatedAt: createdAt ?? mtimeStr, displayName, content: '', tags, wikiLinks: [], isEmpty: false });
+              // 暗号化されていてロック中は本文から日時が取れないため git の追加日時を使う
+              const gitCreatedAt = createdAt ? null : await getGitAddedDate(basePath, relativePath);
+              results.push({ name: relativePath, path: filePath, updatedAt: createdAt ?? gitCreatedAt ?? mtimeStr, displayName, content: '', tags, wikiLinks: [], isEmpty: false });
               return;
             }
 
@@ -689,15 +722,17 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
                 return t !== '' && !t.startsWith('#') && !/^作成日時[:：]/i.test(t) && !/^(タグ|tags?)[:：]/i.test(t);
               }).length === 0;
               const createdAt = extractCreatedAt(content);
-              cached = { updatedAt: mtimeStr, createdAt, tags, wikiLinks, isEmpty };
+              // 本文から日時が取れない場合のみ git の追加日時を引く（mtimeより正確で安定）
+              const gitCreatedAt = createdAt ? null : await getGitAddedDate(basePath, relativePath);
+              cached = { updatedAt: mtimeStr, createdAt, gitCreatedAt, tags, wikiLinks, isEmpty };
               cache[relativePath] = cached;
               cacheUpdated.value = true;
             }
-            
+
             results.push({
               name: relativePath,
               path: filePath,
-              updatedAt: cached.createdAt ?? mtimeStr,
+              updatedAt: cached.createdAt ?? cached.gitCreatedAt ?? mtimeStr,
               content: '', // 本文ロードをスキップ
               tags: cached.tags,
               wikiLinks: cached.wikiLinks,

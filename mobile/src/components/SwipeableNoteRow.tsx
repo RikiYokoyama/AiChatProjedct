@@ -125,9 +125,6 @@ export default function SwipeableNoteRow({
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-[11px] text-gray-500">
             <span>{formatDateTime(note.updatedAt)}</span>
-            {note.tags.slice(0, 3).map((tag) => (
-              <span key={tag} className="text-emerald-400/80">#{tag}</span>
-            ))}
           </div>
         </div>
       </div>
