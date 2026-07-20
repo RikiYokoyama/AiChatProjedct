@@ -21,20 +21,39 @@ export const SYSTEM_PROMPTS: Record<ChatMode, string> = {
   'long-doc': 'あなたは長文ドキュメント解析の専門家です。ノートコンテキストとして渡された文書全体（または会話に貼り付けられたテキスト）を精読し、ユーザーの指示に答えてください。\n\n【対応できる作業】\n- 要約・要点抽出（「要約して」「ポイントをまとめて」）\n- 質疑応答（「〇〇について教えて」）\n- 構造分析（「章ごとにまとめて」「目次を作って」）\n- 比較・評価（「メリット・デメリットを整理して」）\n- アクションアイテム抽出（「次にやることを箇条書きで」）\n\n【回答ルール】\n- 文書の具体的な箇所を引用して根拠を示す\n- ユーザーの指示に応じて出力の長さを調整する（要約なら簡潔に、詳細解説なら詳しく）\n- 重要な概念は [[キーワード]] 形式（Obsidian内部リンク）で出力する\n- 文書に記載のない事項は推測せず「文書中に記載なし」と明示する',
 };
 
+// 単発（非ストリーミング）のgenerateContent呼び出し。
+// 単一モデル固定だと、そのモデルがGoogle側で過負荷(503)等になった際に
+// 全滅して機能が無反応に見えるため、chatStreamと同様に複数モデルを順に試す。
+const SINGLE_SHOT_MODEL_CANDIDATES = ['gemini-3.5-flash', 'gemini-3.1-flash-lite-preview'];
+
+async function callGenerateContent(apiKey: string, prompt: string): Promise<string> {
+  let lastError: unknown = null;
+  for (const model of SINGLE_SHOT_MODEL_CANDIDATES) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
+        },
+      );
+      if (!response.ok) throw new Error(`Gemini APIエラー (${response.status})`);
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+      if (text) return text;
+      throw new Error('empty response');
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError ?? new Error('generateContent failed');
+}
+
 export async function generateNoteTitle(apiKey: string, userPrompt: string, aiReply: string): Promise<string> {
   const prompt = `以下の会話から、Markdownのファイル名に適した短いタイトル（20文字以内、日本語可）を1行だけ出力してください。記号や説明は不要です。\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
-      },
-    );
-    if (!response.ok) throw new Error('title generation failed');
-    const data = await response.json();
-    const title = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    const title = await callGenerateContent(apiKey, prompt);
     return title || 'AIチャット';
   } catch {
     return 'AIチャット';
@@ -44,17 +63,7 @@ export async function generateNoteTitle(apiKey: string, userPrompt: string, aiRe
 export async function generateNoteTags(apiKey: string, userPrompt: string, aiReply: string): Promise<string[]> {
   const prompt = `以下の会話から、話の内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
-      },
-    );
-    if (!response.ok) throw new Error('tag generation failed');
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    const text = await callGenerateContent(apiKey, prompt);
     if (!text) return [];
     return text.split(/[,，、]/).map((t: string) => t.trim().replace(/^#/, '')).filter(Boolean);
   } catch {
@@ -73,17 +82,7 @@ export async function generateMocContent(apiKey: string, mocTitle: string, noteI
     .map(n => `- ${n.name.replace(/\.md$/i, '')}${n.tags.length ? ` (タグ: ${n.tags.join(', ')})` : ''}${n.snippet ? ` — ${n.snippet}` : ''}`)
     .join('\n');
   const prompt = `あなたはObsidianのMOC（Map of Content）エキスパートです。\n以下のノートリストを分析し、「${mocTitle}」というタイトルのMOCをMarkdown形式で作成してください。\n\n【ルール】\n- 関連するノートをテーマ別にグループ化し、見出し（##）でセクションを分ける\n- 各ノートは必ず [[ノート名]] 形式の内部リンクで記述する\n- 各リンクに1行の簡潔な説明を加える\n- 前置きや説明文は不要。Markdownの本文のみ出力する\n- ノート数が多い場合は重要度の高いものを優先する\n\nノートリスト:\n${list}`;
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
-    },
-  );
-  if (!response.ok) throw new Error(`Gemini APIエラー (${response.status})`);
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+  return callGenerateContent(apiKey, prompt);
 }
 
 export async function generateTagsFromContent(apiKey: string, noteContent: string, allTags: string[] = []): Promise<string[]> {
@@ -92,17 +91,7 @@ export async function generateTagsFromContent(apiKey: string, noteContent: strin
     : '';
   const prompt = `以下のノート本文を読み、内容に合うキーワードの「タグ」を1〜3個推測し、カンマ区切りのリストで出力してください。ハッシュ記号（#）は含めず、純粋なキーワードだけを出力してください。説明や記号、前置きなどは不要です。\n出力例: 仕事, タグ, 開発${tagHint}\n\n${noteContent.slice(0, 4000)}`;
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }),
-      },
-    );
-    if (!response.ok) throw new Error('tag generation failed');
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    const text = await callGenerateContent(apiKey, prompt);
     if (!text) return [];
     return text.split(/[,，、]/).map((t: string) => t.trim().replace(/^#/, '')).filter(Boolean);
   } catch {
