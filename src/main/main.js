@@ -685,7 +685,7 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
             const relativePath = path.relative(basePath, filePath).replace(/\\/g, '/');
             const mtimeStr = stat.mtime.toISOString();
 
-            // private/ 配下はキャッシュ不使用。ロック解除中は非同期復号してdisplayNameを取得
+            // private/ 配下は本文・タグをキャッシュしない（機密情報のため）。ロック解除中は非同期復号してdisplayNameを取得
             if (isPrivatePath(relativePath)) {
               let displayName = null, tags = [], createdAt = null;
               if (vaultPassword) {
@@ -701,8 +701,21 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
                   console.error(`Private decrypt failed (${relativePath}):`, err.message);
                 }
               }
-              // 暗号化されていてロック中は本文から日時が取れないため git の追加日時を使う
-              const gitCreatedAt = createdAt ? null : await getGitAddedDate(basePath, relativePath);
+              // gitの追加日時は本文と無関係で機密性が無く、ファイルが存在する限り変わらないため
+              // 別枠で永続キャッシュする（ロック中でも毎回git logを再実行しないように）
+              let gitCreatedAt = null;
+              if (!createdAt) {
+                if (!cache._gitDates) cache._gitDates = {};
+                if (cache._gitDates[relativePath]) {
+                  gitCreatedAt = cache._gitDates[relativePath];
+                } else {
+                  gitCreatedAt = await getGitAddedDate(basePath, relativePath);
+                  if (gitCreatedAt) {
+                    cache._gitDates[relativePath] = gitCreatedAt;
+                    cacheUpdated.value = true;
+                  }
+                }
+              }
               results.push({ name: relativePath, path: filePath, updatedAt: createdAt ?? gitCreatedAt ?? mtimeStr, displayName, content: '', tags, wikiLinks: [], isEmpty: false });
               return;
             }
