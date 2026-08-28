@@ -144,6 +144,50 @@ function cleanFilename(value: string) {
   return `${base || 'Untitled'}.md`;
 }
 
+// タグ1件を正規化。前後の記号除去・[[..]]展開・日付/空/1文字は除外（不採用ならnull）
+function sanitizeTag(raw: string): string | null {
+  let t = raw.trim();
+  const wikiMatch = t.match(/^\[\[([^\]|]+)(?:\|[^\]]+)?\]\]$/);
+  if (wikiMatch) t = wikiMatch[1].trim();
+  t = t.replace(/^[[\]#"'`]+|[[\]#"'`]+$/g, '').trim();
+  if (!t) return null;
+  if (t === '---') return null;
+  if (/^\d{4}[-\/]\d{1,2}[-\/]\d{1,2}$/.test(t)) return null; // 日付
+  if (t.length <= 1) return null;
+  return t;
+}
+
+// タグ配列をサニタイズし重複除去。既存のマスタータグと大文字小文字違いで一致するものは
+// そのマスタータグの表記に統一する（新規と紛らわしい重複タグを作らないため）
+function sanitizeTags(rawTags: string[], masterTags: string[] = []): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of rawTags) {
+    for (const part of raw.split(/[,，、\n]+/)) {
+      const cleaned = sanitizeTag(part);
+      if (!cleaned) continue;
+      const reused = masterTags.find((m) => m.toLowerCase() === cleaned.toLowerCase());
+      const finalTag = reused ?? cleaned;
+      const key = finalTag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(finalTag);
+    }
+  }
+  return result;
+}
+
+// 既存の全てのタグ行（表記揺れ・複数行含む）を除去した上で、末尾に正準フォーマットの
+// タグ行を1行だけ追加する（タグが空なら追加しない）
+const TAG_LINE_REGEX = /^(?:タグ|tags?)\s*[:：]\s*[^\n\r]*\r?\n?/gim;
+
+function applyTagsToContent(content: string, tags: string[], masterTags: string[] = []): string {
+  const cleanTags = sanitizeTags(tags, masterTags);
+  const stripped = content.replace(TAG_LINE_REGEX, '').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  if (cleanTags.length === 0) return `${stripped}\n`;
+  return `${stripped}\n\nタグ: ${cleanTags.join(', ')}\n`;
+}
+
 function RibbonButton({
   icon,
   active,
@@ -1210,32 +1254,22 @@ export default function App() {
 
   // タグ更新・追加・削除ロジック
   async function updateNoteTags(targetNote: Note, nextTags: string[]) {
-    let newContent = content;
-    // タグ行のパターン
-    const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
-    const dateLineRegex = /^(作成日時\s*[:：]\s*[^\n\r]*)/m;
-
-    const tagsString = nextTags.join(', ');
-
-    if (tagLineRegex.test(newContent)) {
-      // 既存のタグ行を置換
-      newContent = newContent.replace(tagLineRegex, `タグ: ${tagsString}`);
-    } else if (dateLineRegex.test(newContent)) {
-      // 作成日時行の直後にタグ行を挿入
-      newContent = newContent.replace(dateLineRegex, (match) => `${match}\nタグ: ${tagsString}`);
-    } else {
-      // どちらもなければファイルの先頭に挿入
-      newContent = `タグ: ${tagsString}\n\n${newContent}`;
-    }
+    const cleanTags = sanitizeTags(nextTags, masterTags);
+    const newContent = applyTagsToContent(content, cleanTags, masterTags);
 
     setContent(newContent);
     setNoteContext(newContent);
-    
+
     // 保存
     const result = await window.electronAPI.saveNote({ filename: targetNote.name, content: newContent });
     if (result.success) {
-      setSelectedNote(prev => prev ? { ...prev, tags: nextTags, content: newContent } : null);
+      setSelectedNote(prev => prev ? { ...prev, tags: cleanTags, content: newContent } : null);
       await loadNotesList();
+      const nextMasterTags = Array.from(new Set([...masterTags, ...cleanTags]));
+      if (nextMasterTags.length !== masterTags.length) {
+        setMasterTags(nextMasterTags);
+        await window.electronAPI.saveMasterTags(nextMasterTags);
+      }
     }
   }
 
@@ -1480,7 +1514,7 @@ export default function App() {
     setAutoSaveStatus('saving');
     try {
       // 会話からタグを自動生成
-      const extracted = await generateNoteTags(config.geminiApiKey, userPrompt, aiReply);
+      const extracted = sanitizeTags(await generateNoteTags(config.geminiApiKey, userPrompt, aiReply), masterTags);
 
       if (selectedNote) {
         const currentTags = selectedNote.tags || [];
@@ -1493,20 +1527,9 @@ export default function App() {
 
         await window.electronAPI.appendToNote({ filename: selectedNote.name, appendContent: block });
         const noteContent = await window.electronAPI.readNote(selectedNote.name);
-        
-        // 保存済みの内容に対してタグを更新
-        let finalContent = noteContent;
-        const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
-        const dateLineRegex = /^(作成日時\s*[:：]\s*[^\n\r]*)/m;
-        const tagsString = nextTags.join(', ');
 
-        if (tagLineRegex.test(finalContent)) {
-          finalContent = finalContent.replace(tagLineRegex, `タグ: ${tagsString}`);
-        } else if (dateLineRegex.test(finalContent)) {
-          finalContent = finalContent.replace(dateLineRegex, (match) => `${match}\nタグ: ${tagsString}`);
-        } else {
-          finalContent = `タグ: ${tagsString}\n\n${finalContent}`;
-        }
+        // 保存済みの内容に対してタグを更新
+        const finalContent = applyTagsToContent(noteContent, nextTags, masterTags);
 
         // 更新したタグ付きのテキストを再度保存
         await window.electronAPI.saveNote({ filename: selectedNote.name, content: finalContent });
@@ -1538,8 +1561,7 @@ export default function App() {
       } else {
         const title = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
         const filename = cleanFilename(title);
-        const tagsString = extracted.join(', ');
-        const fullContent = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${tagsString}\n\n${block}\n`;
+        const fullContent = applyTagsToContent(`# ${title}\n\n作成日時: ${new Date().toLocaleString()}\n\n${block}\n`, extracted, masterTags);
         const result = await window.electronAPI.saveNote({ filename, content: fullContent });
         if (result.success) {
           const savedName = result.name ?? filename;
@@ -1587,14 +1609,10 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const tags = await generateTagsFromContent(config.geminiApiKey, body, masterTags);
+      const tags = sanitizeTags(await generateTagsFromContent(config.geminiApiKey, body, masterTags), masterTags);
       const current = selectedNote.tags || [];
       const nextTags = Array.from(new Set([...current, ...tags]));
-      const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
-      const tagsString = nextTags.join(', ');
-      const nextContent = tagLineRegex.test(body)
-        ? body.replace(tagLineRegex, `タグ: ${tagsString}`)
-        : `タグ: ${tagsString}\n\n${body}`;
+      const nextContent = applyTagsToContent(body, nextTags, masterTags);
       await window.electronAPI.saveNote({ filename: selectedNote.name, content: nextContent });
       setContent(nextContent);
       setNoteContext(nextContent);

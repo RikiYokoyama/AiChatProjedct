@@ -23,6 +23,7 @@ import {
 import {
   Note,
   applyTagsToContent,
+  sanitizeTags,
   buildNote,
   cleanFilename,
   extractCreatedAt,
@@ -897,7 +898,7 @@ export default function App() {
 
   // ---------- タグ ----------
   async function updateTags(name: string, currentContent: string, nextTags: string[]) {
-    const nextContent = applyTagsToContent(currentContent, nextTags);
+    const nextContent = applyTagsToContent(currentContent, nextTags, masterTags);
     if (name === noteTabSelectedName) setNoteTabContent(nextContent);
     const note = notes.find(n => n.name === name);
     if (config.gitRemoteUrl && note?.remotePath) {
@@ -925,7 +926,8 @@ export default function App() {
 
     if (action === 'tags') {
       setAutoSaveStatus('saving');
-      const tags = await generateTagsFromContent(config.geminiApiKey, body, masterTags);
+      const rawTags = await generateTagsFromContent(config.geminiApiKey, body, masterTags);
+      const tags = sanitizeTags(rawTags, masterTags);
       const current = targetNote?.tags ?? [];
       await updateTags(targetName, body, Array.from(new Set([...current, ...tags])));
       if (tags.length > 0) {
@@ -1064,7 +1066,7 @@ export default function App() {
     const block = `---\n\n## User\n\n${userPrompt.trim()}\n\n## AI\n\n${aiReply.trim()}`;
     setAutoSaveStatus('saving');
     try {
-      const extracted = await generateNoteTags(config.geminiApiKey, userPrompt, aiReply);
+      const extracted = sanitizeTags(await generateNoteTags(config.geminiApiKey, userPrompt, aiReply), masterTags);
       if (extracted.length > 0) {
         const nextMasterTags = Array.from(new Set([...masterTags, ...extracted]));
         setMasterTags(nextMasterTags);
@@ -1080,7 +1082,7 @@ export default function App() {
                    : currentNote?.content ?? '';
         const currentTags = currentNote?.tags ?? [];
         const nextTags = Array.from(new Set([...currentTags, ...extracted]));
-        const appended = applyTagsToContent(`${base.trimEnd()}\n\n${block}\n`, nextTags);
+        const appended = applyTagsToContent(`${base.trimEnd()}\n\n${block}\n`, nextTags, masterTags);
         if (targetName === noteTabSelectedName) setNoteTabContent(appended);
         if (config.gitRemoteUrl && currentNote?.remotePath) {
           await saveNoteToGitHub(config.gitRemoteUrl, currentNote.remotePath, appended, currentNote.sha);
@@ -1092,7 +1094,8 @@ export default function App() {
         const rawTitle = await generateNoteTitle(config.geminiApiKey, userPrompt, aiReply);
         const title = rawTitle.slice(0, 30);
         const filename = cleanFilename(title);
-        const full = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\nタグ: ${extracted.join(', ')}\n\n${block}\n`;
+        const base = `# ${title}\n\n作成日時: ${new Date().toLocaleString()}\n\n${block}\n`;
+        const full = applyTagsToContent(base, extracted, masterTags);
         const remotePath = `notes/${filename}`;
         if (config.gitRemoteUrl) {
           await saveNoteToGitHub(config.gitRemoteUrl, remotePath, full);

@@ -79,18 +79,48 @@ export function initialNoteContent(title: string) {
   return `# ${title}\n作成日時: ${formatted}\n\n`;
 }
 
-// タグ行を更新（なければ作成日時行の直後、それもなければ先頭に挿入）
-export function applyTagsToContent(content: string, tags: string[]): string {
-  const tagLineRegex = /^(タグ|tags|tag)\s*[:：]\s*[^\n\r]*/im;
-  const dateLineRegex = /^(作成日時\s*[:：]\s*[^\n\r]*)/m;
-  const tagsString = tags.join(', ');
-  if (tagLineRegex.test(content)) {
-    return content.replace(tagLineRegex, `タグ: ${tagsString}`);
+// タグ1件を正規化。前後の記号除去・[[..]]展開・日付/空/1文字は除外（不採用ならnull）
+function sanitizeTag(raw: string): string | null {
+  let t = raw.trim();
+  const wikiMatch = t.match(/^\[\[([^\]|]+)(?:\|[^\]]+)?\]\]$/);
+  if (wikiMatch) t = wikiMatch[1].trim();
+  t = t.replace(/^[[\]#"'`]+|[[\]#"'`]+$/g, '').trim();
+  if (!t) return null;
+  if (t === '---') return null;
+  if (/^\d{4}[-\/]\d{1,2}[-\/]\d{1,2}$/.test(t)) return null; // 日付
+  if (t.length <= 1) return null;
+  return t;
+}
+
+// タグ配列をサニタイズし重複除去。既存のマスタータグと大文字小文字違いで一致するものは
+// そのマスタータグの表記に統一する（新規と紛らわしい重複タグを作らないため）
+export function sanitizeTags(rawTags: string[], masterTags: string[] = []): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of rawTags) {
+    for (const part of raw.split(/[,，、\n]+/)) {
+      const cleaned = sanitizeTag(part);
+      if (!cleaned) continue;
+      const reused = masterTags.find((m) => m.toLowerCase() === cleaned.toLowerCase());
+      const finalTag = reused ?? cleaned;
+      const key = finalTag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(finalTag);
+    }
   }
-  if (dateLineRegex.test(content)) {
-    return content.replace(dateLineRegex, (match) => `${match}\nタグ: ${tagsString}`);
-  }
-  return `タグ: ${tagsString}\n\n${content}`;
+  return result;
+}
+
+// 既存の全てのタグ行（表記揺れ・複数行含む）を除去した上で、末尾に正準フォーマットの
+// タグ行を1行だけ追加する（タグが空なら追加しない）
+const TAG_LINE_REGEX = /^(?:タグ|tags?)\s*[:：]\s*[^\n\r]*\r?\n?/gim;
+
+export function applyTagsToContent(content: string, tags: string[], masterTags: string[] = []): string {
+  const cleanTags = sanitizeTags(tags, masterTags);
+  let stripped = content.replace(TAG_LINE_REGEX, '').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+  if (cleanTags.length === 0) return `${stripped}\n`;
+  return `${stripped}\n\nタグ: ${cleanTags.join(', ')}\n`;
 }
 
 // タイトル・日付・タグ行しかない未記入ファイルを判定
