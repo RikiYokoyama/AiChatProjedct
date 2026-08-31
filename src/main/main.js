@@ -9,6 +9,11 @@ let mainWindow;
 // ---------- 暗号化保管庫（private/）の状態 ----------
 let vaultPassword = null;        // ロック解除中だけメモリ保持
 let vaultAutoLockTimer = null;
+// private/ ノートの復号結果（displayName/tags/createdAt）のメモリ内キャッシュ。
+// PBKDF2は1ファイルにつき20万回の反復でありノートごとに実行すると非常に重いため、
+// 内容が変わっていない（mtime一致）限り再復号しないようにする。ディスクには保存せず
+// プロセスメモリのみ・ロック時に破棄することでセキュリティ上の懸念は生じない。
+let privateMetaCache = {};
 const isPrivatePath = (name) => name.replace(/\\/g, '/').startsWith('private/');
 const vaultFilePath = () => path.join(appConfig.notesPath, 'private', '_vault.json');
 
@@ -44,6 +49,7 @@ function refreshVaultAutoLock() {
   if (vaultPassword && mins > 0) {
     vaultAutoLockTimer = setTimeout(() => {
       vaultPassword = null;
+      privateMetaCache = {};
       mainWindow?.webContents.send('vault-locked');
     }, mins * 60000);
   }
@@ -694,16 +700,23 @@ async function getAllMarkdownFiles(dirPath, basePath, cache, cacheUpdated) {
             if (isPrivatePath(relativePath)) {
               let displayName = null, tags = [], createdAt = null;
               if (vaultPassword) {
-                try {
-                  const rawContent = await fs.promises.readFile(filePath, 'utf8');
-                  if (cryptoVault.isEncrypted(rawContent)) {
-                    const decrypted = await cryptoVault.decryptAsync(rawContent, vaultPassword);
-                    displayName = decrypted.split('\n')[0].replace(/^#+\s*/, '').trim() || null;
-                    tags = extractTags(decrypted);
-                    createdAt = extractCreatedAt(decrypted);
+                const cachedMeta = privateMetaCache[relativePath];
+                if (cachedMeta && cachedMeta.mtime === mtimeStr) {
+                  // PBKDF2(20万回)は1ファイルごとに重いため、内容未変更ならメモリキャッシュを再利用
+                  ({ displayName, tags, createdAt } = cachedMeta);
+                } else {
+                  try {
+                    const rawContent = await fs.promises.readFile(filePath, 'utf8');
+                    if (cryptoVault.isEncrypted(rawContent)) {
+                      const decrypted = await cryptoVault.decryptAsync(rawContent, vaultPassword);
+                      displayName = decrypted.split('\n')[0].replace(/^#+\s*/, '').trim() || null;
+                      tags = extractTags(decrypted);
+                      createdAt = extractCreatedAt(decrypted);
+                      privateMetaCache[relativePath] = { mtime: mtimeStr, displayName, tags, createdAt };
+                    }
+                  } catch (err) {
+                    console.error(`Private decrypt failed (${relativePath}):`, err.message);
                   }
-                } catch (err) {
-                  console.error(`Private decrypt failed (${relativePath}):`, err.message);
                 }
               }
               // gitの追加日時は本文と無関係で機密性が無く、ファイルが存在する限り変わらないため
@@ -983,6 +996,7 @@ ipcMain.handle('vault-unlock', async (event, { password }) => {
 // 手動ロック
 ipcMain.handle('vault-lock', async () => {
   vaultPassword = null;
+  privateMetaCache = {};
   if (vaultAutoLockTimer) clearTimeout(vaultAutoLockTimer);
   return { success: true };
 });
