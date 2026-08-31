@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -256,6 +256,92 @@ function SortableTab({
   );
 }
 
+const USER_HR_CODE = '__HR_USER__';
+const AI_HR_CODE = '__HR_AI__';
+
+// ノート本文のMarkdownプレビュー。チャット入力欄の入力などApp全体の再レンダリングが
+// 起きるたびに毎回Markdown→AST変換をやり直すと、ノートが長文化するほど重くなり
+// タイピングがもっさりする原因になるため、content（表示内容）が変わらない限り
+// 再レンダリングしないようmemo化する。
+const NotePreview = memo(function NotePreview({
+  content,
+  previewDivRef,
+  onContextMenu,
+  onWikiLinkClick,
+  onWikiLinkContextMenu,
+}: {
+  content: string;
+  previewDivRef: React.RefObject<HTMLDivElement>;
+  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onWikiLinkClick: (noteName: string) => void;
+  onWikiLinkContextMenu: (info: { x: number; y: number; noteName: string; displayText: string }) => void;
+}) {
+  return (
+    <div
+      ref={previewDivRef}
+      className="markdown-preview h-full overflow-y-auto p-6"
+      onContextMenu={onContextMenu}
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code: ({ children, className }) => {
+            if (!className) {
+              const s = String(children).trim();
+              if (s === USER_HR_CODE) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
+              if (s === AI_HR_CODE) return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
+            }
+            return <code className={className}>{children}</code>;
+          },
+          a: (props) => {
+            const { href, children } = props;
+            if (href && href.startsWith('#wiki-')) {
+              const noteName = decodeURIComponent(href.replace('#wiki-', ''));
+              const displayText = children?.toString() || noteName;
+              return (
+                <span
+                  className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onWikiLinkClick(noteName);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onWikiLinkContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      noteName,
+                      displayText,
+                    });
+                  }}
+                >
+                  {children}
+                </span>
+              );
+            }
+            return (
+              <a
+                href={href}
+                className="text-blue-400 hover:underline"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                {...props}
+              >
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
 export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
   // 開いているタブの順序付きリスト
@@ -487,9 +573,6 @@ export default function App() {
     return processed;
   };
 
-  const USER_HR_CODE = '__HR_USER__';
-  const AI_HR_CODE   = '__HR_AI__';
-
   // プレビュー時に ## User / ## AI / **User** 等のラベル行をインラインコードマーカーに置換
   const replaceUserAiWithHr = (text: string) => {
     if (!text) return '';
@@ -614,6 +697,20 @@ export default function App() {
       setWikiLinkCreateConfirm({ targetName: cleanTargetName });
     }
   };
+
+  // NotePreview(memo化済み)に渡すための参照安定なラッパー。
+  // 中身は毎レンダリング最新のhandleWikiLinkClick/handlePreviewContextMenuに差し替えつつ、
+  // 関数の参照自体は不変に保つことでNotePreviewの不要な再レンダリングを防ぐ。
+  const handleWikiLinkClickRef = useRef(handleWikiLinkClick);
+  handleWikiLinkClickRef.current = handleWikiLinkClick;
+  const stableHandleWikiLinkClick = useCallback((noteName: string) => handleWikiLinkClickRef.current(noteName), []);
+
+  const handlePreviewContextMenuRef = useRef(handlePreviewContextMenu);
+  handlePreviewContextMenuRef.current = handlePreviewContextMenu;
+  const stableHandlePreviewContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => handlePreviewContextMenuRef.current(e),
+    []
+  );
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -2504,68 +2601,13 @@ export default function App() {
                   spellCheck={false}
                 />
               ) : (
-                <div
-                  ref={previewDivRef}
-                  className="markdown-preview h-full overflow-y-auto p-6"
-                  onContextMenu={handlePreviewContextMenu}
-                >
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      code: ({ children, className }) => {
-                        if (!className) {
-                          const s = String(children).trim();
-                          if (s === USER_HR_CODE) return <hr style={{ border: 'none', borderTop: '1.5px solid #378ADD', opacity: 0.5, margin: '12px 0' }} />;
-                          if (s === AI_HR_CODE)   return <hr style={{ border: 'none', borderTop: '1.5px solid #1D9E75', opacity: 0.5, margin: '12px 0' }} />;
-                        }
-                        return <code className={className}>{children}</code>;
-                      },
-                      a: (props) => {
-                        const { href, children } = props;
-                        if (href && href.startsWith('#wiki-')) {
-                          const noteName = decodeURIComponent(href.replace('#wiki-', ''));
-                          const displayText = children?.toString() || noteName;
-                          return (
-                            <span
-                              className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleWikiLinkClick(noteName);
-                              }}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setWikiLinkContextMenu({
-                                  x: e.clientX,
-                                  y: e.clientY,
-                                  noteName,
-                                  displayText,
-                                });
-                              }}
-                            >
-                              {children}
-                            </span>
-                          );
-                        }
-                        return (
-                          <a
-                            href={href}
-                            className="text-blue-400 hover:underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            {...props}
-                          >
-                            {children}
-                          </a>
-                        );
-                      }
-                    }}
-                  >
-                    {renderContent}
-                  </ReactMarkdown>
-                </div>
+                <NotePreview
+                  content={renderContent}
+                  previewDivRef={previewDivRef}
+                  onContextMenu={stableHandlePreviewContextMenu}
+                  onWikiLinkClick={stableHandleWikiLinkClick}
+                  onWikiLinkContextMenu={setWikiLinkContextMenu}
+                />
               )
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-gray-500">
