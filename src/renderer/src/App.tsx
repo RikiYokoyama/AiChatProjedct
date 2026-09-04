@@ -259,6 +259,69 @@ function SortableTab({
 const USER_HR_CODE = '__HR_USER__';
 const AI_HR_CODE = '__HR_AI__';
 
+function getCreatedDate(note: Note): Date {
+  const match = note.content.match(/作成日時\s*[:：]\s*([^\n\r]+)/);
+  if (match) {
+    const d = new Date(match[1].trim());
+    if (!isNaN(d.getTime())) return d;
+  }
+  return new Date(note.updatedAt);
+}
+
+// 作成日時を "YYYY/MM/DD HH:mm" 形式で表示（不正な値は空文字）
+function formatNoteDateTime(note: Note): string {
+  const d = getCreatedDate(note);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// サイドバーのノート一覧。チャットのストリーミング更新など無関係なstateでApp全体が
+// 再レンダリングされるたびに、4,000件超のノートを毎回まるごと作り直すのを防ぐためmemo化する。
+const NoteSidebarList = memo(function NoteSidebarList({
+  notes,
+  selectedNoteName,
+  onOpenNote,
+  onContextMenu,
+}: {
+  notes: Note[];
+  selectedNoteName: string | undefined;
+  onOpenNote: (note: Note) => void;
+  onContextMenu: (x: number, y: number, note: Note) => void;
+}) {
+  return (
+    <>
+      {notes.map((note) => {
+        const empty = note.isEmpty ?? false;
+        const isActive = selectedNoteName === note.name;
+        return (
+          <button
+            key={note.name}
+            className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${
+              isActive
+                ? 'bg-indigo-500/20 text-indigo-100'
+                : empty
+                ? 'text-yellow-300/80'
+                : 'text-gray-300'
+            }`}
+            onClick={() => onOpenNote(note)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onContextMenu(e.clientX, e.clientY, note);
+            }}
+          >
+            <FileText className={`h-4 w-4 shrink-0 ${empty && !isActive ? 'text-yellow-400' : ''}`} />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
+              <span className="truncate text-[11px] text-gray-500">{formatNoteDateTime(note)}</span>
+            </span>
+          </button>
+        );
+      })}
+    </>
+  );
+});
+
 // ノート本文のMarkdownプレビュー。チャット入力欄の入力などApp全体の再レンダリングが
 // 起きるたびに毎回Markdown→AST変換をやり直すと、ノートが長文化するほど重くなり
 // タイピングがもっさりする原因になるため、content（表示内容）が変わらない限り
@@ -475,8 +538,10 @@ export default function App() {
   const [expandedTags, setExpandedTags] = useState<string[]>([]);
   const [expandedLinks, setExpandedLinks] = useState<string[]>([]);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
-  const chatEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  // ストリーミング中の再レンダリング頻度を抑えるためのバッファ（チャンクは一旦ここに貯めてまとめて反映する）
+  const streamBufferRef = useRef('');
+  const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewDivRef = useRef<HTMLDivElement>(null);
   const savedPreviewScroll = useRef(0);
@@ -722,24 +787,17 @@ export default function App() {
     []
   );
 
+  // NoteSidebarList(memo化済み)に渡すための参照安定なラッパー
+  const openNoteRef = useRef(openNote);
+  openNoteRef.current = openNote;
+  const stableOpenNote = useCallback((note: Note) => openNoteRef.current(note), []);
+
+  const stableSetContextMenu = useCallback(
+    (x: number, y: number, note: Note) => setContextMenu({ x, y, note }),
+    []
+  );
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-
-  const getCreatedDate = (note: Note): Date => {
-    const match = note.content.match(/作成日時\s*[:：]\s*([^\n\r]+)/);
-    if (match) {
-      const d = new Date(match[1].trim());
-      if (!isNaN(d.getTime())) return d;
-    }
-    return new Date(note.updatedAt);
-  };
-
-  // 作成日時を "YYYY/MM/DD HH:mm" 形式で表示（不正な値は空文字）
-  const formatNoteDateTime = (note: Note): string => {
-    const d = getCreatedDate(note);
-    if (isNaN(d.getTime())) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
 
   // 全タグ一覧用データの抽出
   const allDirs = useMemo(() => {
@@ -1773,19 +1831,46 @@ export default function App() {
     setStreamedText('');
     setIsGenerating(true);
 
+    // トークン単位で届くチャンクを都度setStateすると再レンダリングが多発するため、
+    // 一旦refに貯めて70msごとにまとめて画面へ反映する
+    streamBufferRef.current = '';
+    const clearFlushTimer = () => {
+      if (streamFlushTimerRef.current) {
+        clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
+    };
+    const scheduleFlush = () => {
+      if (streamFlushTimerRef.current) return;
+      streamFlushTimerRef.current = setTimeout(() => {
+        streamFlushTimerRef.current = null;
+        if (streamBufferRef.current) {
+          setStreamedText((prev) => prev + streamBufferRef.current);
+          streamBufferRef.current = '';
+        }
+      }, 70);
+    };
+
     await client.chatStream(
       nextHistory,
       getSystemPrompt(mode),
       modelMode,
       ctx,
-      (chunk) => setStreamedText((prev) => prev + chunk),
+      (chunk) => {
+        streamBufferRef.current += chunk;
+        scheduleFlush();
+      },
       (fullText) => {
+        clearFlushTimer();
+        streamBufferRef.current = '';
         setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
         setStreamedText('');
         setIsGenerating(false);
         handleAutoSave(prompt, fullText);
       },
       (error) => {
+        clearFlushTimer();
+        streamBufferRef.current = '';
         setIsGenerating(false);
         setStreamedText('');
         setChatError({
@@ -1914,10 +1999,6 @@ export default function App() {
     });
     return () => { unsubscribe(); unsubVault(); unsubNotes(); unsubQuit(); unsubQuitProgress(); };
   }, []);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory, streamedText]);
 
   useEffect(() => {
     if (!selectedNote || editMode !== 'edit') return;
@@ -2453,32 +2534,12 @@ export default function App() {
                 {isLoading ? (
                   <div className="p-4 text-sm text-gray-400">読み込み中...</div>
                 ) : (
-                  filteredNotes.map((note) => {
-                    const empty = note.isEmpty ?? false;
-                    return (
-                      <button
-                        key={note.name}
-                        className={`mb-1 flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm hover:bg-white/10 ${
-                          selectedNote?.name === note.name
-                            ? 'bg-indigo-500/20 text-indigo-100'
-                            : empty
-                            ? 'text-yellow-300/80'
-                            : 'text-gray-300'
-                        }`}
-                        onClick={() => openNote(note)}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setContextMenu({ x: e.clientX, y: e.clientY, note });
-                        }}
-                      >
-                        <FileText className={`h-4 w-4 shrink-0 ${empty && selectedNote?.name !== note.name ? 'text-yellow-400' : ''}`} />
-                        <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate">{note.displayName ?? note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}</span>
-                          <span className="truncate text-[11px] text-gray-500">{formatNoteDateTime(note)}</span>
-                        </span>
-                      </button>
-                    );
-                  })
+                  <NoteSidebarList
+                    notes={filteredNotes}
+                    selectedNoteName={selectedNote?.name}
+                    onOpenNote={stableOpenNote}
+                    onContextMenu={stableSetContextMenu}
+                  />
                 )}
               </div>
               {/* 件数（右下） */}
