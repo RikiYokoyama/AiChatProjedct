@@ -135,65 +135,76 @@ export class GeminiClient {
     }
 
     let lastError: unknown = null;
+    // 503/429（混雑・レート制限）はモデルを見切る前に同一モデルへ短い間隔で再試行する。
+    // 待つほど成功しやすい一時的な過負荷が大半のため、切り替えるより先に粘る方が有効。
+    const RETRY_DELAYS_MS = [2000, 5000];
 
     for (const model of MODEL_CANDIDATES[modelMode]) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(this.apiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents,
-              systemInstruction: { parts: [{ text: systemText }] },
-              generationConfig: {
-                temperature: 0.7,
-              },
-            }),
-          },
-        );
+      for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(this.apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents,
+                systemInstruction: { parts: [{ text: systemText }] },
+                generationConfig: {
+                  temperature: 0.7,
+                },
+              }),
+            },
+          );
 
-        if (!response.ok) {
-          const status = response.status;
-          if (status === 429) throw new Error('リクエストが多すぎます（レート制限）。少し時間をおいてから再送してください。');
-          if (status === 503) throw new Error('Geminiサーバーが一時的に混雑しています（503）。しばらく待ってから再試行してください。');
-          if (status === 401 || status === 403) throw new Error('APIキーが無効または権限がありません。設定を確認してください。');
-          if (status === 400) throw new Error('リクエストの形式が正しくありません（400）。モデルまたは入力内容を確認してください。');
-          throw new Error(`Gemini APIエラー（${status}）: 時間をおいて再試行してください。`);
-        }
+          if (!response.ok) {
+            const status = response.status;
+            if (status === 429) throw new Error('リクエストが多すぎます（レート制限）。少し時間をおいてから再送してください。');
+            if (status === 503) throw new Error('Geminiサーバーが一時的に混雑しています（503）。しばらく待ってから再試行してください。');
+            if (status === 401 || status === 403) throw new Error('APIキーが無効または権限がありません。設定を確認してください。');
+            if (status === 400) throw new Error('リクエストの形式が正しくありません（400）。モデルまたは入力内容を確認してください。');
+            throw new Error(`Gemini APIエラー（${status}）: 時間をおいて再試行してください。`);
+          }
 
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('Gemini APIの応答本文を読めませんでした。');
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error('Gemini APIの応答本文を読めませんでした。');
 
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let fullText = '';
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let fullText = '';
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(5).trim();
-            if (!payload || payload === '[DONE]') continue;
-            const parsed = JSON.parse(payload);
-            const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-            if (chunk) {
-              fullText += chunk;
-              onChunk(chunk);
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+              if (!line.startsWith('data:')) continue;
+              const payload = line.slice(5).trim();
+              if (!payload || payload === '[DONE]') continue;
+              const parsed = JSON.parse(payload);
+              const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+              if (chunk) {
+                fullText += chunk;
+                onChunk(chunk);
+              }
             }
           }
-        }
 
-        if (!fullText.trim()) throw new Error('Gemini APIから空の応答が返りました。');
-        onComplete(fullText);
-        return;
-      } catch (error) {
-        lastError = error;
+          if (!fullText.trim()) throw new Error('Gemini APIから空の応答が返りました。');
+          onComplete(fullText);
+          return;
+        } catch (error) {
+          lastError = error;
+          const isRetryable = /429|503|混雑|レート制限/.test(error instanceof Error ? error.message : '');
+          if (isRetryable && attempt < RETRY_DELAYS_MS.length) {
+            await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+            continue;
+          }
+          break;
+        }
       }
     }
 

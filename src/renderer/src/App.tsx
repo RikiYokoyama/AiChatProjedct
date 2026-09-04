@@ -456,6 +456,16 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [streamedText, setStreamedText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  // チャット送信失敗時、同じ内容で再試行できるように直前のリクエストを保持する
+  const [chatError, setChatError] = useState<{
+    message: string;
+    nextHistory: ChatMessage[];
+    noteContext: string | null;
+    mocContent: string;
+    chatMode: string;
+    aiModelMode: AiModelMode;
+    contextLimit: number;
+  } | null>(null);
   const [chatMode, setChatMode] = useState<string>('deep-think');
   const [aiModelMode, setAiModelMode] = useState<AiModelMode>('flash-lite');
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -1747,16 +1757,58 @@ export default function App() {
     );
   }
 
+  // 実際のchatStream呼び出し本体。sendChat（新規送信）とretryLastChat（再試行）の両方から使う。
+  async function runChatRequest(params: {
+    prompt: string;
+    nextHistory: ChatMessage[];
+    noteContext: string | null;
+    mocContent: string;
+    chatMode: string;
+    aiModelMode: AiModelMode;
+    contextLimit: number;
+  }) {
+    const { prompt, nextHistory, noteContext: ctx, mocContent, chatMode: mode, aiModelMode: modelMode, contextLimit } = params;
+    const client = new GeminiClient(config.geminiApiKey);
+    setChatError(null);
+    setStreamedText('');
+    setIsGenerating(true);
+
+    await client.chatStream(
+      nextHistory,
+      getSystemPrompt(mode),
+      modelMode,
+      ctx,
+      (chunk) => setStreamedText((prev) => prev + chunk),
+      (fullText) => {
+        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
+        setStreamedText('');
+        setIsGenerating(false);
+        handleAutoSave(prompt, fullText);
+      },
+      (error) => {
+        setIsGenerating(false);
+        setStreamedText('');
+        setChatError({
+          message: error instanceof Error ? error.message : String(error),
+          nextHistory,
+          noteContext: ctx,
+          mocContent,
+          chatMode: mode,
+          aiModelMode: modelMode,
+          contextLimit,
+        });
+      },
+      { contextLimit, mocContext: mocContent },
+    );
+  }
+
   async function sendChat(overridePrompt?: string, forceMocRef = false) {
     const prompt = (overridePrompt ?? chatInput).trim();
     if (!prompt || isGenerating) return;
-    const client = new GeminiClient(config.geminiApiKey);
     const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: prompt }];
     setChatHistory(nextHistory);
     setChatInput('');
     if (chatInputRef.current) chatInputRef.current.style.height = 'auto';
-    setStreamedText('');
-    setIsGenerating(true);
 
     // moc-ref モード選択時のみノート一覧をMOCとして送信する
     let mocContent = '';
@@ -1794,27 +1846,23 @@ export default function App() {
       }
     }
 
-    await client.chatStream(
+    await runChatRequest({
+      prompt,
       nextHistory,
-      getSystemPrompt(chatMode),
-      aiModelMode,
       noteContext,
-      (chunk) => setStreamedText((prev) => prev + chunk),
-      (fullText) => {
-        setChatHistory([...nextHistory, { role: 'model', content: fullText }]);
-        setStreamedText('');
-        setIsGenerating(false);
-        handleAutoSave(prompt, fullText);
-      },
-      (error) => {
-        setIsGenerating(false);
-        alert(error instanceof Error ? error.message : String(error));
-      },
-      {
-        contextLimit: chatMode === 'long-doc' ? 100000 : 12000,
-        mocContext: mocContent
-      },
-    );
+      mocContent,
+      chatMode,
+      aiModelMode,
+      contextLimit: chatMode === 'long-doc' ? 100000 : 12000,
+    });
+  }
+
+  // 直前に失敗したリクエストを、ユーザーメッセージを重複追加せずに再送する
+  async function retryLastChat() {
+    if (!chatError || isGenerating) return;
+    const { nextHistory, noteContext: ctx, mocContent, chatMode: mode, aiModelMode: modelMode, contextLimit } = chatError;
+    const prompt = nextHistory[nextHistory.length - 1]?.content ?? '';
+    await runChatRequest({ prompt, nextHistory, noteContext: ctx, mocContent, chatMode: mode, aiModelMode: modelMode, contextLimit });
   }
 
   useEffect(() => {
@@ -2619,47 +2667,37 @@ export default function App() {
           {/* 下部チャットエリア */}
           {selectedNote && (
             <div className="border-t border-white/10 bg-[#0b1020]/90 p-4">
-              {/* ストリーミング回答表示 */}
+              {/* ストリーミング回答表示：受信中はMarkdown解析せず素のテキストで表示し、
+                  文章量に比例して重くなる再パースコストを避ける（完了後はchatHistory側でMarkdown表示される） */}
               {streamedText && (
                 <div className="mb-3 rounded bg-white/5 p-3 border border-white/10 text-sm max-h-[120px] overflow-y-auto">
                   <div className="text-xs text-indigo-400 font-semibold mb-1">AI回答中...</div>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      a: (props) => {
-                        const { href, children } = props;
-                        if (href && href.startsWith('#wiki-')) {
-                          const noteName = decodeURIComponent(href.replace('#wiki-', ''));
-                          return (
-                            <span
-                              className="text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleWikiLinkClick(noteName);
-                              }}
-                            >
-                              {children}
-                            </span>
-                          );
-                        }
-                        return (
-                          <a
-                            href={href}
-                            className="text-blue-400 hover:underline"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            {...props}
-                          >
-                            {children}
-                          </a>
-                        );
-                      }
-                    }}
-                  >
-                    {preprocessContent(streamedText)}
-                  </ReactMarkdown>
+                  <div className="whitespace-pre-wrap text-gray-100">{streamedText}</div>
+                </div>
+              )}
+
+              {/* チャット送信失敗時のエラー表示と再試行 */}
+              {chatError && (
+                <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3.5 text-sm">
+                  <div className="font-semibold text-red-300">⚠ 送信に失敗しました</div>
+                  <div className="mt-1 text-red-200/90">{chatError.message}</div>
+                  <div className="mt-2.5 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={retryLastChat}
+                      disabled={isGenerating}
+                      className="rounded bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-40 transition-colors"
+                    >
+                      再試行
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChatError(null)}
+                      className="rounded px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                    >
+                      閉じる
+                    </button>
+                  </div>
                 </div>
               )}
 
