@@ -4,6 +4,7 @@ import FilesScreen from './screens/NotesScreen';
 import NoteScreen from './screens/NoteScreen';
 import GraphScreen from './screens/GraphScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import QuickChatScreen from './screens/QuickChatScreen';
 import {
   AppConfig,
   CustomPrompt,
@@ -72,7 +73,7 @@ const CHAT_MODE_LABELS: Record<ChatMode, string> = {
 };
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('files');
+  const [tab, setTab] = useState<Tab>('quick');
   const [notes, setNotes] = useState<Note[]>([]);
   const [config, setConfig] = useState<AppConfig>(emptyConfig);
   const [masterTags, setMasterTags] = useState<string[]>([]);
@@ -1311,10 +1312,31 @@ export default function App() {
     if (config.gitRemoteUrl) writeCustomPromptsToGitHub(config.gitRemoteUrl, next.customPrompts).catch(() => {});
   }
 
+  // クイックチャットで新しく付いたタグをマスタータグへ追加（PC版と共有するためGitHubにも反映）
+  function handleMasterTagsAdded(tags: string[]) {
+    const next = Array.from(new Set([...masterTags, ...tags]));
+    setMasterTags(next);
+    saveMasterTagsLocal(next);
+    if (config.gitRemoteUrl) writeMasterTagsToGitHub(config.gitRemoteUrl, next).catch(() => {});
+  }
+
   // ---------- 画面レンダリング ----------
   return (
     <div className="safe-top flex h-full flex-col bg-[#070a13] text-gray-100">
       <main className="min-h-0 flex-1 bg-[#070a13]">
+
+        {/* クイックチャット。タブを切り替えても会話が消えないよう、非表示にするだけで常にマウントしておく */}
+        <div className={tab === 'quick' ? 'h-full' : 'hidden'}>
+          <QuickChatScreen
+            geminiApiKey={config.geminiApiKey}
+            gitRemoteUrl={config.gitRemoteUrl}
+            aiModelMode={aiModelMode}
+            masterTags={masterTags}
+            onMasterTagsAdded={handleMasterTagsAdded}
+            onNoteCreated={() => { void refreshNotes(); }}
+            onOpenSettings={() => setTab('settings')}
+          />
+        </div>
 
         {/* ファイルタブ */}
         {tab === 'files' && (
