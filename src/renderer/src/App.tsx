@@ -2813,6 +2813,7 @@ export default function App() {
                   onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
                 >
                   <option value="flash-lite">Flash Lite</option>
+                  <option value="flash-lite-latest">Flash Lite 最新</option>
                   <option value="flash">Flash</option>
                   <option value="pro">Pro</option>
                 </select>
@@ -3213,6 +3214,7 @@ export default function App() {
                     onChange={(e) => setAiModelMode(e.target.value as AiModelMode)}
                   >
                     <option value="flash-lite">Flash Lite</option>
+                    <option value="flash-lite-latest">Flash Lite 最新</option>
                     <option value="flash">Flash</option>
                     <option value="pro">Pro</option>
                   </select>

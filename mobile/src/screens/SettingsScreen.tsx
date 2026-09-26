@@ -64,8 +64,8 @@ export default function SettingsScreen({
       {/* AIモデル選択 */}
       <div className="mb-3">
         <span className="mb-1.5 block text-sm text-gray-300">AIモデル</span>
-        <div className="flex gap-2">
-          {(['flash-lite', 'flash', 'pro'] as AiModelMode[]).map((m) => (
+        <div className="grid grid-cols-2 gap-2">
+          {(['flash-lite', 'flash-lite-latest', 'flash', 'pro'] as AiModelMode[]).map((m) => (
             <button
               key={m}
               onClick={() => onModelModeChange(m)}
@@ -75,11 +75,11 @@ export default function SettingsScreen({
                   : 'border-white/10 bg-white/5 text-gray-400 active:bg-white/10'
               }`}
             >
-              {m === 'flash-lite' ? 'Flash Lite' : m === 'flash' ? 'Flash' : 'Pro'}
+              {m === 'flash-lite' ? 'Flash Lite' : m === 'flash-lite-latest' ? 'Flash Lite 最新' : m === 'flash' ? 'Flash' : 'Pro'}
             </button>
           ))}
         </div>
-        <p className="mt-1 text-[11px] text-gray-500">Flash Lite: 高速・低コスト　Flash: 標準　Pro: 高精度</p>
+        <p className="mt-1 text-[11px] text-gray-500">Flash Lite: 高速・低コスト　Flash Lite 最新: 最新世代の高速モデル　Flash: 標準　Pro: 高精度</p>
       </div>
 
       {/* GitリモートURL */}

@@ -4,10 +4,12 @@ export interface ChatMessage {
 }
 
 export type ChatMode = 'deep-think' | 'markdown-struct' | 'long-explain' | 'prompt-gen' | 'long-doc' | 'moc-ref';
-export type AiModelMode = 'flash-lite' | 'flash' | 'pro';
+export type AiModelMode = 'flash-lite' | 'flash-lite-latest' | 'flash' | 'pro';
 
 const MODEL_CANDIDATES: Record<AiModelMode, string[]> = {
   'flash-lite': ['gemini-3.1-flash-lite-preview'],
+  // -latest は常に最新世代のFlash Liteを指す別名。別名が使えない場合は同じ上限を共有しない旧世代へ切り替える
+  'flash-lite-latest': ['gemini-flash-lite-latest', 'gemini-3.1-flash-lite-preview'],
   flash: ['gemini-3.5-flash'],
   pro: ['gemini-3.1-pro-preview', 'gemini-3.5-flash'],
 };
