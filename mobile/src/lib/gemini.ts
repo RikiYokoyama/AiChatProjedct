@@ -51,6 +51,34 @@ async function callGenerateContent(apiKey: string, prompt: string): Promise<stri
   throw lastError ?? new Error('generateContent failed');
 }
 
+export async function mocSummarizeStream(
+  apiKey: string,
+  mocTitle: string,
+  collectedNotes: { name: string; content: string }[],
+  onChunk: (text: string) => void,
+  onComplete: (fullText: string) => void,
+  onError: (err: unknown) => void,
+): Promise<void> {
+  const sections = collectedNotes
+    .map(n => `## ${n.name.replace(/\.md$/i, '').replace(/^.*\//, '')}\n\n${n.content.slice(0, 3000)}`)
+    .join('\n\n---\n\n')
+    .slice(0, 80000);
+
+  const systemPrompt = 'あなたはObsidianノート知識ベースの分析専門家です。提供されたノート群を横断的に分析し、全体の知識を構造化してまとめてください。\n\n【出力ルール】\n- 共通テーマやトピックを見出し（##）でグループ化する\n- 各ノートの重要情報を要約し箇条書きで示す\n- ノート間の繋がりや関連性を明示する\n- 重要なキーワードは [[キーワード]] 形式でリンク化する\n- 最後に全体の洞察・まとめを記述する';
+  const userMessage = `「${mocTitle}」のMOCから収集した${collectedNotes.length}件のノートを分析してまとめてください:\n\n${sections}`;
+
+  const client = new GeminiClient(apiKey);
+  await client.chatStream(
+    [{ role: 'user', content: userMessage }],
+    systemPrompt,
+    'flash',
+    null,
+    onChunk,
+    onComplete,
+    onError,
+  );
+}
+
 export async function generateNoteTitle(apiKey: string, userPrompt: string, aiReply: string): Promise<string> {
   const prompt = `以下の会話から、Markdownのファイル名に適した短いタイトル（20文字以内、日本語可）を1行だけ出力してください。記号や説明は不要です。\n\nUser: ${userPrompt.slice(0, 300)}\nAI: ${aiReply.slice(0, 300)}`;
   try {

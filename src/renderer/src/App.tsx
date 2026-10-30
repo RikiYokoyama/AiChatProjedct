@@ -42,7 +42,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import GraphView from './GraphView';
-import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, generateTagsFromContent, generateMocContent, NoteInfo, SYSTEM_PROMPTS } from './lib/gemini';
+import { AiModelMode, ChatMessage, ChatMode, GeminiClient, generateNoteTitle, generateNoteTags, generateTagsFromContent, generateMocContent, mocSummarizeStream, NoteInfo, SYSTEM_PROMPTS } from './lib/gemini';
 
 interface CustomPrompt {
   id: string;
@@ -186,6 +186,62 @@ function applyTagsToContent(content: string, tags: string[], masterTags: string[
   const stripped = content.replace(TAG_LINE_REGEX, '').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
   if (cleanTags.length === 0) return `${stripped}\n`;
   return `${stripped}\n\nタグ: ${cleanTags.join(', ')}\n`;
+}
+
+// MOCまとめ: [[wikiリンク]] を抽出
+function extractWikiLinks(text: string): string[] {
+  const result: string[] = [];
+  const re = /\[\[([^\]|#]+)(?:\|[^\]]*)?\]\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const link = m[1].trim();
+    if (link) result.push(link);
+  }
+  return result;
+}
+
+// ファイル名が MOC / Index / Map を含む場合は MOC ノートと判定
+function isMocNote(name: string): boolean {
+  const base = name.replace(/^.*\//, '').replace(/\.md$/i, '').toLowerCase();
+  return /\bmoc\b|index|map[\s_-]?of[\s_-]?content/i.test(base);
+}
+
+function findNoteByLink(link: string, allNotes: Note[]): Note | undefined {
+  const linkNorm = link.toLowerCase().replace(/\.md$/i, '');
+  return allNotes.find((n) => {
+    const full = n.name.replace(/\.md$/i, '').toLowerCase();
+    const short = n.name.replace(/^.*\//, '').replace(/\.md$/i, '').toLowerCase();
+    return full === linkNorm || short === linkNorm;
+  });
+}
+
+async function collectMocLeaves(
+  startNote: Note,
+  allNotes: Note[],
+  maxDepth: number,
+  onProgress: (count: number, name: string) => void,
+): Promise<{ name: string; content: string }[]> {
+  const visited = new Set<string>([startNote.name]);
+  const leaves: { name: string; content: string }[] = [];
+
+  async function traverse(note: Note, depth: number) {
+    const links = extractWikiLinks(note.content);
+    for (const link of links) {
+      const target = findNoteByLink(link, allNotes);
+      if (!target || visited.has(target.name)) continue;
+      visited.add(target.name);
+      if (isMocNote(target.name) && depth < maxDepth) {
+        onProgress(leaves.length, target.name);
+        await traverse(target, depth + 1);
+      } else if (!isMocNote(target.name)) {
+        leaves.push({ name: target.name, content: target.content });
+        onProgress(leaves.length, target.name);
+      }
+    }
+  }
+
+  await traverse(startNote, 1);
+  return leaves;
 }
 
 function RibbonButton({
@@ -420,6 +476,8 @@ export default function App() {
   const [renameNewName, setRenameNewName] = useState('');
   // Wikiリンク先が存在しない場合の新規作成確認（window.confirmはネイティブダイアログ後にIMEの入力位置がずれる不具合があるため使わない）
   const [wikiLinkCreateConfirm, setWikiLinkCreateConfirm] = useState<{ targetName: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ note: Note } | null>(null);
+  const [promptDeleteConfirm, setPromptDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview');
 
@@ -445,7 +503,10 @@ export default function App() {
         handleCloseMenu();
         setShowNewNoteModal(false);
         setShowMocModal(false);
+        setShowMocSummaryModal(false);
         setShowRenameModal(false);
+        setDeleteConfirm(null);
+        setPromptDeleteConfirm(null);
         // フォーカスをエディタに戻す
         setTimeout(() => editorRef.current?.focus(), 0);
       }
@@ -481,6 +542,11 @@ export default function App() {
   const [tagFilter, setTagFilter] = useState(''); // ノート一覧のタグ絞り込み（空=すべて）
   const [showMocModal, setShowMocModal] = useState(false);
   const [mocTitle, setMocTitle] = useState('');
+  // MOC再帰サマリー
+  const [showMocSummaryModal, setShowMocSummaryModal] = useState(false);
+  const [mocSummaryDepth, setMocSummaryDepth] = useState(3);
+  const [mocSummaryProgress, setMocSummaryProgress] = useState('');
+  const [isMocSummarizing, setIsMocSummarizing] = useState(false);
   const [mocAiMode, setMocAiMode] = useState(false);
   const [mocFilterType, setMocFilterType] = useState<'all' | 'folder' | 'tag'>('all');
   const [mocFilterValue, setMocFilterValue] = useState('');
@@ -1534,7 +1600,12 @@ export default function App() {
   }
 
   async function handleDeleteCustomPrompt(id: string) {
-    if (!window.confirm('このプロンプトを削除しますか？')) return;
+    const prompt = (config.customPrompts || []).find(cp => cp.id === id);
+    setPromptDeleteConfirm({ id, name: prompt?.name ?? id });
+  }
+
+  async function confirmDeleteCustomPrompt(id: string) {
+    setPromptDeleteConfirm(null);
     const nextCustomPrompts = (config.customPrompts || []).filter(cp => cp.id !== id);
     const newConfig = { ...config, customPrompts: nextCustomPrompts };
     setConfig(newConfig);
@@ -1582,31 +1653,9 @@ export default function App() {
     setEditMode('edit');
   }
 
-  async function deleteCurrentNote() {
+  function deleteCurrentNote() {
     if (!selectedNote) return;
-    if (!window.confirm(`${selectedNote.name} を削除しますか？`)) return;
-    const result = await window.electronAPI.deleteNote(selectedNote.name);
-    if (!result.success) {
-      alert(result.error ?? '削除に失敗しました');
-      return;
-    }
-    const tabName = selectedNote.name;
-    const idx = openTabs.findIndex((t) => t.name === tabName);
-    const nextTabs = openTabs.filter((t) => t.name !== tabName);
-    const fallback = nextTabs[Math.max(0, idx - 1)] ?? nextTabs[0] ?? null;
-
-    setOpenTabs(nextTabs);
-
-    if (fallback) {
-      await openNote(fallback);
-    } else {
-      setSelectedNote(null);
-      setContent('');
-      setNoteContext(null);
-      setChatHistory([]);
-      setStreamedText('');
-    }
-    await loadNotesList();
+    setDeleteConfirm({ note: selectedNote });
   }
 
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
@@ -1940,6 +1989,69 @@ export default function App() {
       aiModelMode,
       contextLimit: chatMode === 'long-doc' ? 100000 : 12000,
     });
+  }
+
+  async function handleMocSummarize() {
+    if (!selectedNote || !config.geminiApiKey || isMocSummarizing) return;
+    setIsMocSummarizing(true);
+    setMocSummaryProgress('ノートを収集中...');
+    try {
+      const leaves = await collectMocLeaves(
+        selectedNote,
+        notes,
+        mocSummaryDepth,
+        (count, name) => setMocSummaryProgress(`${count}件収集中... ${name.replace(/^.*\//, '').replace(/\.md$/i, '')}`),
+      );
+      if (leaves.length === 0) {
+        setMocSummaryProgress('リンク先ノートが見つかりませんでした');
+        setIsMocSummarizing(false);
+        return;
+      }
+      setMocSummaryProgress(`${leaves.length}件収集完了。AIでまとめ中...`);
+      const title = selectedNote.name.replace(/\.md$/i, '').replace(/^.*\//, '');
+      const nextHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: `【MOCまとめ】「${title}」のリンク先${leaves.length}件のノートをまとめてください` }];
+      setChatHistory(nextHistory);
+      setShowMocSummaryModal(false);
+
+      let fullText = '';
+      setStreamedText('');
+      setIsGenerating(true);
+      await mocSummarizeStream(
+        config.geminiApiKey,
+        title,
+        leaves,
+        (chunk) => {
+          fullText += chunk;
+          streamBufferRef.current += chunk;
+          if (!streamFlushTimerRef.current) {
+            streamFlushTimerRef.current = setTimeout(() => {
+              setStreamedText(streamBufferRef.current);
+              streamFlushTimerRef.current = null;
+            }, 60);
+          }
+        },
+        (full) => {
+          if (streamFlushTimerRef.current) { clearTimeout(streamFlushTimerRef.current); streamFlushTimerRef.current = null; }
+          streamBufferRef.current = '';
+          setStreamedText('');
+          setIsGenerating(false);
+          const finalHistory: ChatMessage[] = [...nextHistory, { role: 'model', content: full }];
+          setChatHistory(finalHistory);
+        },
+        (err) => {
+          if (streamFlushTimerRef.current) { clearTimeout(streamFlushTimerRef.current); streamFlushTimerRef.current = null; }
+          setStreamedText('');
+          setIsGenerating(false);
+          console.error('MOCまとめエラー:', err);
+        },
+      );
+    } catch (err) {
+      console.error('MOCまとめエラー:', err);
+      setMocSummaryProgress('エラーが発生しました');
+    } finally {
+      setIsMocSummarizing(false);
+      setMocSummaryProgress('');
+    }
   }
 
   // 直前に失敗したリクエストを、ユーザーメッセージを重複追加せずに再送する
@@ -2632,6 +2744,15 @@ export default function App() {
               >
                 <Trash2 className="h-4 w-4" />
               </button>
+              <div className="mx-1 h-4 w-px bg-white/10" />
+              <button
+                className="rounded px-2 py-1 text-xs font-medium text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/15 hover:text-indigo-300 disabled:opacity-40 transition-colors"
+                onClick={() => { setMocSummaryProgress(''); setShowMocSummaryModal(true); }}
+                disabled={!selectedNote || isGenerating}
+                title="MOCリンク先をまとめる"
+              >
+                🔗 まとめる
+              </button>
             </div>
           </div>
 
@@ -3162,6 +3283,54 @@ export default function App() {
         </div>
       )}
 
+      {/* MOC再帰サマリーモーダル */}
+      {showMocSummaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => !isMocSummarizing && setShowMocSummaryModal(false)}>
+          <div className="w-full max-w-sm rounded-lg border border-indigo-800/50 bg-[#101827] p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-indigo-300">🔗 MOCリンク先をまとめる</h2>
+              <button type="button" className="rounded p-1.5 hover:bg-white/10" onClick={() => setShowMocSummaryModal(false)} disabled={isMocSummarizing}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mb-4 text-xs text-gray-400">
+              現在のノートの <code className="text-indigo-300">[[wikiリンク]]</code> を再帰的にたどり、リンク先ノートの内容をAIでまとめます。
+            </p>
+            <label className="mb-4 block text-sm text-gray-300">
+              最大深さ
+              <div className="mt-1.5 flex items-center gap-3">
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={mocSummaryDepth}
+                  onChange={(e) => setMocSummaryDepth(Number(e.target.value))}
+                  className="flex-1"
+                  disabled={isMocSummarizing}
+                />
+                <span className="w-6 text-center text-sm font-semibold text-indigo-300">{mocSummaryDepth}</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">MOCが{mocSummaryDepth}階層ネストしていても追跡します</p>
+            </label>
+            {mocSummaryProgress && (
+              <div className="mb-3 flex items-center gap-2 rounded bg-indigo-500/10 px-3 py-2 text-xs text-indigo-300">
+                {isMocSummarizing && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
+                <span className="truncate">{mocSummaryProgress}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleMocSummarize}
+              disabled={isMocSummarizing}
+              className="w-full rounded bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+            >
+              {isMocSummarizing ? '実行中...' : 'まとめを開始'}
+            </button>
+            <p className="mt-2 text-center text-xs text-gray-500">結果はチャット欄に表示されます</p>
+          </div>
+        </div>
+      )}
+
       {/* 新規ノートモーダル */}
       {showNewNoteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -3301,33 +3470,9 @@ export default function App() {
           </button>
           <button
             className="flex w-full items-center px-4 py-2 text-left text-xs text-red-400 hover:bg-red-500/10 transition-colors"
-            onClick={async () => {
+            onClick={() => {
               setContextMenu(null);
-              if (!window.confirm(`${contextMenu.note.name} を削除しますか？`)) return;
-              const result = await window.electronAPI.deleteNote(contextMenu.note.name);
-              if (!result.success) {
-                alert(result.error ?? '削除に失敗しました');
-                return;
-              }
-              const tabName = contextMenu.note.name;
-              const idx = openTabs.findIndex((t) => t.name === tabName);
-              const nextTabs = openTabs.filter((t) => t.name !== tabName);
-              const fallback = nextTabs[Math.max(0, idx - 1)] ?? nextTabs[0] ?? null;
-
-              setOpenTabs(nextTabs);
-
-              if (selectedNote?.name === tabName) {
-                if (fallback) {
-                  await openNote(fallback);
-                } else {
-                  setSelectedNote(null);
-                  setContent('');
-                  setNoteContext(null);
-                  setChatHistory([]);
-                  setStreamedText('');
-                }
-              }
-              await loadNotesList();
+              setDeleteConfirm({ note: contextMenu.note });
             }}
           >
             削除
@@ -3374,6 +3519,77 @@ export default function App() {
       )}
 
       {/* Wikiリンク先ノート新規作成確認モーダル */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setDeleteConfirm(null)}>
+          <div
+            className="w-full max-w-md rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-3 text-lg font-semibold text-red-300">ノートを削除</h2>
+            <p className="mb-5 text-sm text-gray-300">
+              「{deleteConfirm.note.name.replace(/^.*\//, '').replace(/\.md$/i, '')}」を削除しますか？この操作は元に戻せません。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg px-4 py-2 text-sm font-semibold text-gray-300 hover:bg-white/10"
+                onClick={() => setDeleteConfirm(null)}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
+                onClick={async () => {
+                  const { note } = deleteConfirm;
+                  setDeleteConfirm(null);
+                  const result = await window.electronAPI.deleteNote(note.name);
+                  if (!result.success) {
+                    alert(result.error ?? '削除に失敗しました');
+                    return;
+                  }
+                  const tabName = note.name;
+                  const idx = openTabs.findIndex((t) => t.name === tabName);
+                  const nextTabs = openTabs.filter((t) => t.name !== tabName);
+                  const fallback = nextTabs[Math.max(0, idx - 1)] ?? nextTabs[0] ?? null;
+                  setOpenTabs(nextTabs);
+                  if (selectedNote?.name === tabName) {
+                    if (fallback) {
+                      await openNote(fallback);
+                    } else {
+                      setSelectedNote(null);
+                      setContent('');
+                      setNoteContext(null);
+                      setChatHistory([]);
+                      setStreamedText('');
+                    }
+                  }
+                  await loadNotesList();
+                }}
+              >
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {promptDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setPromptDeleteConfirm(null)}>
+          <div
+            className="w-full max-w-md rounded-lg border border-white/10 bg-[#101827] p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-3 text-lg font-semibold text-red-300">プロンプトを削除</h2>
+            <p className="mb-5 text-sm text-gray-300">「{promptDeleteConfirm.name}」を削除しますか？</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded-lg px-4 py-2 text-sm font-semibold text-gray-300 hover:bg-white/10" onClick={() => setPromptDeleteConfirm(null)}>キャンセル</button>
+              <button type="button" className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500" onClick={() => confirmDeleteCustomPrompt(promptDeleteConfirm.id)}>削除する</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {wikiLinkCreateConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setWikiLinkCreateConfirm(null)}>
           <div
